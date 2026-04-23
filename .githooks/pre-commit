@@ -1,26 +1,54 @@
 #!/usr/bin/env bash
-# pre-commit — block commits authored by forbidden identities
+# pre-commit — block commits from authors on the blocked list.
 #
-# Forbidden patterns (matched against git config user.email):
-BLOCKED_EMAILS=(
-    ""
-)
+# Configuration lives in .git/config (never committed, never public):
+#
+#   Explicit list (comma-separated, glob patterns supported):
+#     git config hooks.blocked-author-emails "user@corp.com,*@corp.com"
+#
+#   Regex pattern:
+#     git config hooks.blocked-author-pattern ".*@corp\.com"
+#
+# Run setup-dev.sh once to populate these automatically from your global
+# git identity.
 
-current_email=$(git config user.email 2>/dev/null)
+# ─── helpers ────────────────────────────────────────────────────────────────
 
-for blocked in "${BLOCKED_EMAILS[@]}"; do
-    if [[ "$current_email" == "$blocked" ]]; then
-        echo ""
-        echo "  ✖ Commit blocked: the configured author email is forbidden."
-        echo "    Current : $current_email"
-        echo "    Blocked : $blocked"
-        echo ""
-        echo "  Fix with (repo-level):"
-        echo "    git config user.name  'rubeecube'"
-        echo "    git config user.email 'rubeecube@users.noreply.github.com'"
-        echo ""
-        exit 1
-    fi
-done
+_blocked_error() {
+    echo ""
+    echo "  ✖ Commit blocked: author email is on the blocked list."
+    echo "    Blocked : $1"
+    echo ""
+    echo "  Set a repo-local identity:"
+    echo "    git config user.name  'rubeecube'"
+    echo "    git config user.email 'rubeecube@users.noreply.github.com'"
+    echo ""
+}
+
+# ─── check ──────────────────────────────────────────────────────────────────
+
+CURRENT_EMAIL=$(git config user.email 2>/dev/null || echo "")
+
+# 1. Explicit blocked email / glob list
+BLOCKED_CSV=$(git config hooks.blocked-author-emails 2>/dev/null || echo "")
+if [[ -n "$BLOCKED_CSV" ]]; then
+    IFS=',' read -ra _list <<< "$BLOCKED_CSV"
+    for _entry in "${_list[@]}"; do
+        _entry="${_entry#"${_entry%%[![:space:]]*}"}"
+        _entry="${_entry%"${_entry##*[![:space:]]}"}"
+        [[ -z "$_entry" ]] && continue
+        if [[ "$CURRENT_EMAIL" == $_entry ]]; then
+            _blocked_error "$CURRENT_EMAIL"
+            exit 1
+        fi
+    done
+fi
+
+# 2. Regex pattern
+BLOCKED_RE=$(git config hooks.blocked-author-pattern 2>/dev/null || echo "")
+if [[ -n "$BLOCKED_RE" && "$CURRENT_EMAIL" =~ $BLOCKED_RE ]]; then
+    _blocked_error "$CURRENT_EMAIL"
+    exit 1
+fi
 
 exit 0
