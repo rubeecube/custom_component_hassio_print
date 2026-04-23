@@ -72,6 +72,26 @@ logger = logging.getLogger(__name__)
 _STATUS_INTERVAL = timedelta(minutes=5)
 
 
+def _decode_mime_filename(value: str) -> str:
+    """Decode an RFC 2047 MIME-encoded filename (=?charset?B/Q?...?=) to plain text.
+
+    Email clients encode non-ASCII filenames in attachment headers, e.g.:
+    ``=?utf-8?B?QXUgUHVpdHM...?= =?utf-8?Q?m_5786_A4.pdf?=``
+    Falls back to the raw string if decoding fails.
+    """
+    if "=?" not in value:
+        return value
+    try:
+        from email.header import decode_header as _dh
+        parts = _dh(value)
+        return "".join(
+            p.decode(enc or "utf-8", errors="replace") if isinstance(p, bytes) else p
+            for p, enc in parts
+        )
+    except Exception:
+        return value
+
+
 @dataclass
 class PrintJobResult:
     """Outcome of a single print attempt, including audit metadata."""
@@ -319,7 +339,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 continue
 
             had_pdf = True
-            filename: str = (
+            filename: str = _decode_mime_filename(
                 part_info.get("filename")
                 or part_info.get("file_name")
                 or f"document_{part_key}.pdf"
@@ -398,7 +418,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             response: dict[str, Any] = await self.hass.services.async_call(
                 "imap",
                 "fetch_part",
-                {"entry_id": entry_id, "uid": uid, "part": part_key},
+                {"entry": entry_id, "uid": uid, "part": part_key},
                 blocking=True,
                 return_response=True,
             )
@@ -510,14 +530,14 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             if action == "mark_seen":
                 await self.hass.services.async_call(
                     "imap", "seen",
-                    {"entry_id": entry_id, "uid": uid},
+                    {"entry": entry_id, "uid": uid},
                     blocking=True,
                 )
             elif action == "move":
                 await self.hass.services.async_call(
                     "imap", "move",
                     {
-                        "entry_id": entry_id,
+                        "entry": entry_id,
                         "uid": uid,
                         "target_folder": self._email_archive_folder,
                         "seen": True,
@@ -527,7 +547,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             elif action == "delete":
                 await self.hass.services.async_call(
                     "imap", "delete",
-                    {"entry_id": entry_id, "uid": uid},
+                    {"entry": entry_id, "uid": uid},
                     blocking=True,
                 )
         except Exception as exc:
@@ -583,9 +603,26 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         duplex_override: str | None = None,
         booklet_override: bool | None = None,
         sender: str | None = None,
+        attachment_filter: str | None = None,
     ) -> PrintJobResult:
         """Fetch one IMAP attachment and print it (called by the service)."""
-        effective_filename = filename or f"attachment_{part_key}.pdf"
+        # Decode RFC 2047 MIME-encoded filenames that arrive from the IMAP event.
+        effective_filename = _decode_mime_filename(
+            filename or f"attachment_{part_key}.pdf"
+        )
+
+        # Skip this attachment if it doesn't match the caller's name filter.
+        if attachment_filter and attachment_filter.strip():
+            if attachment_filter.strip().lower() not in effective_filename.lower():
+                logger.debug(
+                    "Skipping attachment '%s' — does not match filter '%s'",
+                    effective_filename, attachment_filter,
+                )
+                return PrintJobResult(
+                    filename=effective_filename, success=True,
+                    error=f"skipped: does not match filter '{attachment_filter}'",
+                )
+
         result = await self._async_fetch_and_print(
             entry_id=entry_id,
             uid=uid,
@@ -600,6 +637,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         return result
 
     async def async_print_file(
+
         self,
         file_path: str,
         duplex_mode: str | None = None,

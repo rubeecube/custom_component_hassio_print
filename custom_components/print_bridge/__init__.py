@@ -54,6 +54,7 @@ _PROCESS_IMAP_PART_SCHEMA = vol.Schema(
         vol.Optional("filename"): cv.string,
         vol.Optional("duplex"): vol.In(DUPLEX_MODES),
         vol.Optional("booklet", default=False): cv.boolean,
+        vol.Optional("attachment_filter"): cv.string,
     }
 )
 
@@ -207,6 +208,7 @@ def _register_services(hass: HomeAssistant) -> None:
             filename=call.data.get("filename"),
             duplex_override=call.data.get("duplex"),
             booklet_override=call.data.get("booklet", False) or None,
+            attachment_filter=call.data.get("attachment_filter"),
         )
         if not result.success:
             raise HomeAssistantError(
@@ -336,7 +338,7 @@ def _register_services(hass: HomeAssistant) -> None:
             fetch_result: dict = await hass.services.async_call(
                 "imap",
                 "fetch",
-                {"entry_id": imap_entry_id, "uid": uid},
+                {"entry": imap_entry_id, "uid": uid},
                 blocking=True,
                 return_response=True,
             )

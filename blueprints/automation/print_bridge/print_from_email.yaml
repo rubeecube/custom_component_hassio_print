@@ -157,12 +157,6 @@ action:
                  or repeat.item[1].get('file_name', '')
                  or ('attachment_' ~ repeat.item[0] ~ '.pdf') }}
 
-        - condition: template
-          alias: "Attachment name matches (or filter is empty)"
-          value_template: >
-            {{ attachment_filter | trim == ''
-               or attachment_filter | lower | trim in _filename | lower }}
-
         - action: print_bridge.process_imap_part
           data:
             entry_id: "{{ trigger.event.data.entry_id }}"
@@ -171,6 +165,7 @@ action:
             filename: "{{ _filename }}"
             duplex: "{{ _effective_duplex }}"
             booklet: "{{ booklet }}"
+            attachment_filter: "{{ attachment_filter }}"
 
   - alias: "Mark email as seen (optional)"
     if:
@@ -179,7 +174,7 @@ action:
     then:
       - action: imap.seen
         data:
-          entry_id: "{{ imap_entry_id }}"
+          entry: "{{ imap_entry_id }}"
           uid: "{{ _uid }}"
 
 mode: queued
