@@ -1,9 +1,12 @@
 # Print Bridge
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
-[![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.1%2B-blue.svg)](https://www.home-assistant.io/)
+[![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.4%2B-blue.svg)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-85%20passing-brightgreen.svg)](tests/)
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository?owner=rubeecube&repository=ha-print-bridge&category=integration)
+[![Add Print Bridge to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=print_bridge)
 
 Print PDF email attachments directly to a network printer — fully inside Home Assistant.
 
@@ -87,11 +90,19 @@ The recommended option for HA OS is the **[CUPS add-on by peternicholls](https:/
 
 ### HACS (recommended)
 
-1. **HACS → Integrations → ⋮ → Custom repositories**
-2. Add `https://github.com/rubeecube/ha-print-bridge` — category **Integration**
-3. Search for **Print Bridge** → install → restart HA.
+Click the button below to open Print Bridge directly in HACS:
 
-### Manual
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository?owner=rubeecube&repository=ha-print-bridge&category=integration)
+
+Or add it manually: **HACS → Integrations → ⋮ → Custom repositories** → add `https://github.com/rubeecube/ha-print-bridge` (category **Integration**) → search **Print Bridge** → install → restart HA.
+
+### After installation — open the config flow
+
+Once installed (via HACS or manually), click here to add the integration to your HA instance:
+
+[![Add Print Bridge to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=print_bridge)
+
+### Manual (without HACS)
 
 Copy `custom_components/print_bridge/` into your HA config directory and restart:
 
