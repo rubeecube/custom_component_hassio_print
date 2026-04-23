@@ -181,6 +181,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         self._filter_preview: FilterPreviewResult | None = None
         self._pending_jobs: list[PendingJob] = []
         self._last_schedule_state: bool | None = None  # track open↔closed transitions
+        # Deduplication: maps "uid:part_key" → datetime of last print to prevent
+        # multiple blueprints firing on the same attachment from double-printing.
+        self._recently_printed: dict[str, datetime] = {}
 
     # ------------------------------------------------------------------
     # Properties
@@ -622,6 +625,29 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     filename=effective_filename, success=True,
                     error=f"skipped: does not match filter '{attachment_filter}'",
                 )
+
+        # Deduplication: if another blueprint already printed this exact attachment
+        # within the last 60 seconds, skip silently to prevent double-printing.
+        _dedup_key = f"{uid}:{part_key}"
+        _dedup_window = timedelta(seconds=60)
+        _now = datetime.now()
+        if _dedup_key in self._recently_printed:
+            _age = _now - self._recently_printed[_dedup_key]
+            if _age < _dedup_window:
+                logger.debug(
+                    "Duplicate print skipped for uid=%s part=%s (already printed %.1fs ago)",
+                    uid, part_key, _age.total_seconds(),
+                )
+                return PrintJobResult(
+                    filename=effective_filename, success=True,
+                    error=f"skipped: duplicate (uid={uid} part={part_key} already printed)",
+                )
+        self._recently_printed[_dedup_key] = _now
+        # Purge entries older than the dedup window to avoid unbounded growth.
+        self._recently_printed = {
+            k: v for k, v in self._recently_printed.items()
+            if (_now - v) < _dedup_window
+        }
 
         result = await self._async_fetch_and_print(
             entry_id=entry_id,
