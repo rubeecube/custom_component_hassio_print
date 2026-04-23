@@ -177,6 +177,7 @@ class AutoPrintConfigFlow(ConfigFlow, domain=DOMAIN):
         self._imap_entries: list[ConfigEntry] = []
         self._discovery_done: bool = False
         self._pending_cups_url: str = ""
+        self._pending_imap_sel: str = _SENTINEL_SKIP_IMAP
 
     # ------------------------------------------------------------------
     # Step 1 — main form with auto-discovery
@@ -235,6 +236,7 @@ class AutoPrintConfigFlow(ConfigFlow, domain=DOMAIN):
                 # User chose to type the printer name → go to sub-step.
                 if printer_raw == _SENTINEL_MANUAL:
                     self._pending_cups_url = cups_url
+                    self._pending_imap_sel = imap_sel  # carry IMAP selection to sub-step
                     return await self.async_step_manual_printer()
 
                 printer_name = printer_raw.strip()
@@ -277,7 +279,7 @@ class AutoPrintConfigFlow(ConfigFlow, domain=DOMAIN):
             await self._validate_cups(cups_url, errors)
 
             if not errors:
-                return await self._create(cups_url, printer_name, _SENTINEL_SKIP_IMAP)
+                return await self._create(cups_url, printer_name, self._pending_imap_sel)
 
         schema = vol.Schema({vol.Required(CONF_PRINTER_NAME): str})
         return self.async_show_form(

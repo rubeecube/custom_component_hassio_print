@@ -76,26 +76,20 @@
   },
   "entity": {
     "sensor": {
-      "queue_depth": { "name": "Print Queue Depth" },
-      "last_job": { "name": "Last Print Job" },
-      "job_log": { "name": "Job Log" },
-      "filter_preview": { "name": "Filter Preview" }
+      "queue_depth":    { "name": "Print Queue Depth" },
+      "last_job":       { "name": "Last Print Job" },
+      "job_log":        { "name": "Job Log" },
+      "filter_preview": { "name": "Filter Preview" },
+      "pending_jobs":   { "name": "Scheduled Queue" }
     },
     "binary_sensor": {
       "printer_online": { "name": "Printer Online" }
     },
     "button": {
-      "test_page": { "name": "Print Test Page" },
-      "check_filter": { "name": "Check Filter" },
-      "retry_last_failed": { "name": "Retry Last Failed Job" },
-      "flush_pending": { "name": "Print Queued Jobs Now" }
-    },
-    "sensor": {
-      "queue_depth": { "name": "Print Queue Depth" },
-      "last_job": { "name": "Last Print Job" },
-      "job_log": { "name": "Job Log" },
-      "filter_preview": { "name": "Filter Preview" },
-      "pending_jobs": { "name": "Scheduled Queue" }
+      "test_page":          { "name": "Print Test Page" },
+      "check_filter":       { "name": "Check Filter" },
+      "retry_last_failed":  { "name": "Retry Last Failed Job" },
+      "flush_pending":      { "name": "Print Queued Jobs Now" }
     }
   }
 }

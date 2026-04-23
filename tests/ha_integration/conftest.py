@@ -47,7 +47,7 @@ MOCK_OPTIONS: dict = {
     "duplex_mode": "two-sided-long-edge",
     "booklet_patterns": ["Programme"],
     "auto_delete": True,
-    "queue_folder": "/tmp/auto_print_queue",
+    "queue_folder": "/tmp/print_bridge_queue",
 }
 
 

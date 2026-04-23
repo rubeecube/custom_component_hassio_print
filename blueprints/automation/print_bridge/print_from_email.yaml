@@ -23,7 +23,7 @@ blueprint:
 
   domain: automation
   author: rubeecube
-  source_url: https://github.com/rubeecube/ha-print-bridge/blob/main/blueprints/automation/auto_print/print_from_email.yaml
+  source_url: https://github.com/rubeecube/ha-print-bridge/blob/main/blueprints/automation/print_bridge/print_from_email.yaml
 
   input:
 

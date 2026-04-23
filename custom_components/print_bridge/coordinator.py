@@ -298,6 +298,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         uid: str = str(event.data.get("uid", ""))
 
         had_pdf = False
+        actually_printed = False  # tracks whether any part was immediately printed
         for part_key, part_info in parts.items():
             if part_info.get("content_type") != "application/pdf":
                 continue
@@ -336,13 +337,14 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                                 f"{self._schedule_end}) and will be printed when the "
                                 f"window opens."
                             ),
-                            "notification_id": f"auto_print_queued_{entry_id}_{uid}",
+                            "notification_id": f"print_bridge_queued_{entry_id}_{uid}",
                         },
                     )
                 except Exception:
                     pass
                 continue  # don't print now
 
+            actually_printed = True
             result = await self._async_fetch_and_print(
                 entry_id=entry_id,
                 uid=uid,
@@ -353,7 +355,10 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             self._record_job(result)
             await self._async_notify_job(result)
 
-        if had_pdf:
+        # Only post-process the email after it has been printed immediately.
+        # If all parts were queued by the schedule, post-processing is deferred
+        # to async_flush_pending (to avoid deleting the email before printing).
+        if actually_printed:
             await self._async_post_process_email(entry_id, uid)
 
         if parts:
@@ -548,7 +553,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 {
                     "title": title,
                     "message": message,
-                    "notification_id": f"auto_print_{self._entry.entry_id}_{result.timestamp}",
+                    "notification_id": f"print_bridge_{self._entry.entry_id}_{result.timestamp}",
                 },
             )
         except Exception:
@@ -769,6 +774,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             )
             self._record_job(result)
             await self._async_notify_job(result)
+            # Apply configured IMAP action now that the job has been printed.
+            await self._async_post_process_email(job.entry_id, job.uid)
 
         await self.async_request_refresh()
         return len(jobs)
@@ -783,7 +790,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         if (
             self._pending_jobs
             and currently_open
-            and self._last_schedule_state is False   # was closed last check
+            and self._last_schedule_state is not True  # None (startup) or False triggers flush
         ):
             logger.info("Print window opened — flushing %d pending job(s)", len(self._pending_jobs))
             await self.async_flush_pending()

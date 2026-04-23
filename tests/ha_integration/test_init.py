@@ -3,7 +3,8 @@
 Golden rules applied:
   - async_setup_entry succeeds (state = LOADED).
   - imap_content event listener is registered during setup.
-  - Services are registered after setup and removed after the last entry unloads.
+  - All five services are registered after setup.
+  - Services are removed after the last entry unloads.
   - async_unload_entry succeeds (state = NOT_LOADED).
 """
 
@@ -16,7 +17,14 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.print_bridge.const import DOMAIN, SERVICE_CLEAR_QUEUE, SERVICE_PRINT_FILE
+from custom_components.print_bridge.const import (
+    DOMAIN,
+    SERVICE_CHECK_FILTER,
+    SERVICE_CLEAR_QUEUE,
+    SERVICE_PRINT_FILE,
+    SERVICE_PROCESS_IMAP_PART,
+    SERVICE_RETRY_JOB,
+)
 
 from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS
 
@@ -40,12 +48,20 @@ async def test_setup_registers_services(
     hass: HomeAssistant,
     mock_coordinator_update,
 ) -> None:
+    """All five services must be registered after a successful setup."""
     entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS)
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert hass.services.has_service(DOMAIN, SERVICE_PRINT_FILE)
-    assert hass.services.has_service(DOMAIN, SERVICE_CLEAR_QUEUE)
+
+    for svc in (
+        SERVICE_PRINT_FILE,
+        SERVICE_CLEAR_QUEUE,
+        SERVICE_PROCESS_IMAP_PART,
+        SERVICE_CHECK_FILTER,
+        SERVICE_RETRY_JOB,
+    ):
+        assert hass.services.has_service(DOMAIN, svc), f"Service {svc!r} not registered"
 
 
 async def test_setup_registers_all_platforms(
@@ -66,32 +82,32 @@ async def test_imap_content_listener_registered(
     hass: HomeAssistant,
     mock_coordinator_update,
 ) -> None:
-    """The coordinator's async_handle_imap_event must be subscribed to
-    imap_content events.  We verify this by firing a dummy event and
-    checking that the coordinator method is invoked."""
-    entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS)
-    entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
+    """async_setup_entry must subscribe to 'imap_content' on the HA event bus.
 
-    coordinator = entry.runtime_data
-    coordinator.async_handle_imap_event = AsyncMock()
+    We verify this by patching AutoPrintCoordinator.async_handle_imap_event at
+    class level BEFORE setup, so the bound method captured by the bus listener
+    IS the mock.  Then we fire an imap_content event and assert it was received.
+    """
+    from custom_components.print_bridge.coordinator import AutoPrintCoordinator
 
-    # Fire a synthetic imap_content event — the listener must forward it.
-    hass.bus.async_fire(
-        "imap_content",
-        {
-            "sender": "someone@example.com",
-            "entry_id": "fake_entry",
-            "uid": "42",
-            "parts": {},
-        },
+    with patch.object(
+        AutoPrintCoordinator, "async_handle_imap_event", new=AsyncMock()
+    ) as mock_handler:
+        entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS)
+        entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        hass.bus.async_fire(
+            "imap_content",
+            {"sender": "test@example.com", "entry_id": "fake", "uid": "1", "parts": {}},
+        )
+        await hass.async_block_till_done()
+
+    assert mock_handler.called, (
+        "Expected AutoPrintCoordinator.async_handle_imap_event to be called "
+        "when an imap_content event is fired, but it was not."
     )
-    await hass.async_block_till_done()
-
-    # The coordinator method itself is not replaced on the instance the
-    # listener holds, so we verify indirectly via runtime_data presence.
-    assert entry.runtime_data is coordinator
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +133,7 @@ async def test_unload_removes_services_when_last_entry_unloads(
     hass: HomeAssistant,
     mock_coordinator_update,
 ) -> None:
+    """All services must be removed when the last config entry is unloaded."""
     entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS)
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
@@ -125,5 +142,11 @@ async def test_unload_removes_services_when_last_entry_unloads(
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
-    assert not hass.services.has_service(DOMAIN, SERVICE_PRINT_FILE)
-    assert not hass.services.has_service(DOMAIN, SERVICE_CLEAR_QUEUE)
+    for svc in (
+        SERVICE_PRINT_FILE,
+        SERVICE_CLEAR_QUEUE,
+        SERVICE_PROCESS_IMAP_PART,
+        SERVICE_CHECK_FILTER,
+        SERVICE_RETRY_JOB,
+    ):
+        assert not hass.services.has_service(DOMAIN, svc), f"Service {svc!r} still registered after unload"

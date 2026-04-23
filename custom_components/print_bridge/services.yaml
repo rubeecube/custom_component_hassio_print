@@ -62,7 +62,7 @@ retry_job:
       name: IMAP UID
       description: >-
         The IMAP message UID of the job to retry.  Available as the 'uid'
-        field in sensor.auto_print_*_job_log attributes.
+        field in sensor.print_bridge_*_job_log attributes.
       required: false
       selector:
         text:
@@ -91,7 +91,7 @@ check_filter:
   description: >-
     Connect to the configured IMAP account and list emails that match the current
     allowed-senders filter.  Results are returned as a service response and also
-    update the sensor.auto_print_*_filter_preview entity.
+    update the sensor.print_bridge_*_filter_preview entity.
   fields:
     imap_entry_id:
       name: IMAP Entry ID

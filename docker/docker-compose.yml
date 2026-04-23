@@ -1,7 +1,7 @@
-# Auto Print — self-contained validation stack
+# Print Bridge — self-contained validation stack
 #
 # Services:
-#   homeassistant  HA stable with the auto_print component mounted
+#   homeassistant  HA stable with the print_bridge component mounted
 #   greenmail      Local IMAP + SMTP server (no real mail account needed)
 #   cups           Standalone CUPS with cups-pdf virtual printer
 #
@@ -18,7 +18,7 @@ services:
 
   homeassistant:
     image: ghcr.io/home-assistant/home-assistant:stable
-    container_name: auto_print_ha
+    container_name: print_bridge_ha
     network_mode: host
     volumes:
       - ./ha-config:/config
@@ -40,7 +40,7 @@ services:
 
   greenmail:
     image: greenmail/standalone:2.0.0
-    container_name: auto_print_greenmail
+    container_name: print_bridge_greenmail
     ports:
       - "3025:3025"   # SMTP — validate.sh injects test emails here
       - "3143:3143"   # IMAP — HA's IMAP integration connects here (plain)
@@ -56,7 +56,7 @@ services:
   cups:
     build:
       context: ./cups
-    container_name: auto_print_cups
+    container_name: print_bridge_cups
     ports:
       - "631:631"
     volumes:

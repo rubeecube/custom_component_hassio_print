@@ -7,7 +7,7 @@
 # What this does:
 #   1. Waits for HA, GreenMail, and CUPS to be healthy.
 #   2. Injects a test email with a minimal PDF attachment via GreenMail SMTP.
-#   3. Polls the HA REST API until sensor.auto_print_last_job = "success"
+#   3. Polls the HA REST API until sensor.print_bridge_testprinter_last_print_job = "success"
 #      (or until timeout).
 #   4. Asserts that cups-pdf wrote a PDF to the shared output volume.
 #   5. Exits 0 on full success, 1 on any failure.
@@ -124,11 +124,11 @@ PYEOF
 pass "Test email sent."
 
 # ---------------------------------------------------------------------------
-# 3. Poll HA REST API for sensor.auto_print_last_job = "success"
+# 3. Poll HA REST API for sensor.print_bridge_testprinter_last_print_job = "success"
 # ---------------------------------------------------------------------------
 info "Waiting up to ${TIMEOUT_SECONDS}s for Print Bridge to process the job..."
 
-ENTITY="sensor.auto_print_last_job"
+ENTITY="sensor.print_bridge_testprinter_last_print_job"
 ELAPSED=0
 JOB_STATE=""
 
@@ -142,7 +142,7 @@ while [[ $ELAPSED -lt $TIMEOUT_SECONDS ]]; do
     )
 
     if [[ "$JOB_STATE" == "success" ]]; then
-        pass "sensor.auto_print_last_job = success"
+        pass "sensor.print_bridge_testprinter_last_print_job = success"
         break
     fi
 
@@ -170,13 +170,13 @@ done
 info "Checking CUPS output volume for printed PDF..."
 
 # The volume is named cups_output; inspect it via the cups container.
-PDF_COUNT=$(docker exec auto_print_cups \
+PDF_COUNT=$(docker exec print_bridge_cups \
     sh -c 'ls /var/spool/cups-pdf/ANONYMOUS/*.pdf 2>/dev/null | wc -l' || echo "0")
 
 if [[ "$PDF_COUNT" -gt 0 ]]; then
     pass "cups-pdf produced $PDF_COUNT PDF file(s) in the output volume."
 else
-    fail "No PDF found in cups-pdf output directory. Check CUPS logs: docker logs auto_print_cups"
+    fail "No PDF found in cups-pdf output directory. Check CUPS logs: docker logs print_bridge_cups"
 fi
 
 # ---------------------------------------------------------------------------

@@ -70,7 +70,7 @@ Expected output:
 [PASS] GreenMail is ready.
 [PASS] CUPS is ready.
 [PASS] Test email sent.
-[PASS] sensor.auto_print_last_job = success
+[PASS] sensor.print_bridge_last_job = success
 [PASS] cups-pdf produced 1 PDF file(s) in the output volume.
 
 ========================================
@@ -93,11 +93,11 @@ docker compose down -v   # -v removes the cups_output volume too
 
 ```bash
 # See printed PDFs
-docker exec auto_print_cups ls /var/spool/cups-pdf/ANONYMOUS/
+docker exec print_bridge_cups ls /var/spool/cups-pdf/ANONYMOUS/
 
 # CUPS logs
-docker logs auto_print_cups
+docker logs print_bridge_cups
 
-# HA logs (filter to auto_print)
-docker logs auto_print_ha 2>&1 | grep auto_print
+# HA logs (filter to print_bridge)
+docker logs print_bridge_ha 2>&1 | grep print_bridge
 ```

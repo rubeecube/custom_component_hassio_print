@@ -374,3 +374,40 @@ async def test_options_flow_empty_senders_means_accept_all(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["allowed_senders"] == []
+
+
+# ---------------------------------------------------------------------------
+# Direct IPP mode — no CUPS required
+# ---------------------------------------------------------------------------
+
+async def test_direct_ipp_flow_creates_entry(
+    hass: HomeAssistant,
+    mock_setup_entry,
+) -> None:
+    """When a Direct IPP URL is provided, the entry is created without CUPS fields."""
+    with _mock_no_discovery():
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+
+    # Supply a direct IPP URL — CUPS fields are ignored.
+    direct_url = "http://10.0.0.23/ipp/print"
+    with patch(
+        "custom_components.print_bridge.config_flow.async_get_clientsession",
+        return_value=_make_cups_session(200),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                "direct_printer_url": direct_url,
+                "cups_url": "http://10.0.0.1:631",
+                "printer_name": "TestPrinter",
+            },
+        )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"]["direct_printer_url"] == direct_url
+    # CUPS fields must NOT be stored when direct mode is used.
+    assert "printer_name" not in result["data"]
+    assert "cups_url" not in result["data"]
+    assert "Direct" in result["title"] or "10.0.0.23" in result["title"]
