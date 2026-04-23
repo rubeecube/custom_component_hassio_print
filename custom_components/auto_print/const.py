@@ -11,12 +11,16 @@ CONF_PRINTER_NAME = "printer_name"
 # ---------------------------------------------------------------------------
 # Options-flow keys — editable after setup via "Configure"
 # ---------------------------------------------------------------------------
-CONF_ALLOWED_SENDERS = "allowed_senders"   # list[str]; empty = accept all
-CONF_FOLDER_FILTER = "folder_filter"       # list[str]; empty = accept all folders
+CONF_ALLOWED_SENDERS = "allowed_senders"          # list[str]; empty = accept all
+CONF_FOLDER_FILTER = "folder_filter"               # list[str]; empty = accept all folders
 CONF_DUPLEX_MODE = "duplex_mode"
-CONF_BOOKLET_PATTERNS = "booklet_patterns"  # list[str]
+CONF_BOOKLET_PATTERNS = "booklet_patterns"         # list[str]
 CONF_AUTO_DELETE = "auto_delete"
 CONF_QUEUE_FOLDER = "queue_folder"
+CONF_EMAIL_ACTION = "email_action_after_print"     # what to do with the email after printing
+CONF_EMAIL_ARCHIVE_FOLDER = "email_archive_folder" # target folder when action = "move"
+CONF_NOTIFY_ON_FAILURE = "notify_on_failure"       # send HA notification when print fails
+CONF_NOTIFY_ON_SUCCESS = "notify_on_success"       # send HA notification when print succeeds
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -25,6 +29,18 @@ DEFAULT_CUPS_URL = "http://10.0.0.23:631"
 DEFAULT_DUPLEX_MODE = "two-sided-long-edge"
 DEFAULT_AUTO_DELETE = True
 DEFAULT_QUEUE_FOLDER = "/media/print_queue"
+DEFAULT_EMAIL_ACTION = "none"
+DEFAULT_EMAIL_ARCHIVE_FOLDER = "INBOX/Printed"
+DEFAULT_NOTIFY_ON_FAILURE = True
+DEFAULT_NOTIFY_ON_SUCCESS = False
+
+# Choices for the email_action_after_print option
+EMAIL_ACTIONS: dict[str, str] = {
+    "none": "Do nothing",
+    "mark_seen": "Mark as read",
+    "move": "Move to archive folder",
+    "delete": "Delete from server",
+}
 
 # Human-readable labels for duplex mode selector
 DUPLEX_MODES: dict[str, str] = {

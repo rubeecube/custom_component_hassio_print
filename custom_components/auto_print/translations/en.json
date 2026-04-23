@@ -43,14 +43,22 @@
           "duplex_mode": "Default Duplex Mode",
           "booklet_patterns": "Booklet Filename Patterns (one per line)",
           "auto_delete": "Delete PDF from queue after printing",
-          "queue_folder": "Print Queue Folder"
+          "queue_folder": "Print Queue Folder",
+          "email_action_after_print": "Email Action after Printing",
+          "email_archive_folder": "Archive Folder (for Move action)",
+          "notify_on_failure": "Notify when print fails",
+          "notify_on_success": "Notify when print succeeds"
         },
         "data_description": {
           "allowed_senders": "Only emails from these addresses trigger a print job. Leave empty to accept all senders.",
           "folder_filter": "Only process emails arriving in these IMAP folders. Leave empty to accept all folders. Use the exact folder name shown in parentheses above (e.g. INBOX, INBOX/Print).",
           "imap_account": "Select an account to append its email address to Allowed Senders automatically.",
           "booklet_patterns": "If the PDF filename contains any of these substrings it is printed as a booklet (two-sided short-edge, pages reordered).",
-          "queue_folder": "Folder where PDFs are saved when using the print_file service. Must be writable by Home Assistant."
+          "queue_folder": "Folder where PDFs are saved when using the print_file service. Must be writable by Home Assistant.",
+          "email_action_after_print": "What to do with the email in your mailbox after the PDF is printed.",
+          "email_archive_folder": "IMAP folder to move emails to when 'Move to archive folder' is selected (e.g. INBOX/Printed). Created automatically by most servers.",
+          "notify_on_failure": "Send a Home Assistant notification when a print job fails.",
+          "notify_on_success": "Send a Home Assistant notification when a print job completes successfully."
         }
       }
     }

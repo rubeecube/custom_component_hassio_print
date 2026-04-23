@@ -24,15 +24,24 @@ from .const import (
     CONF_BOOKLET_PATTERNS,
     CONF_CUPS_URL,
     CONF_DUPLEX_MODE,
+    CONF_EMAIL_ACTION,
+    CONF_EMAIL_ARCHIVE_FOLDER,
     CONF_FOLDER_FILTER,
+    CONF_NOTIFY_ON_FAILURE,
+    CONF_NOTIFY_ON_SUCCESS,
     CONF_PRINTER_NAME,
     CONF_QUEUE_FOLDER,
     DEFAULT_AUTO_DELETE,
     DEFAULT_CUPS_URL,
     DEFAULT_DUPLEX_MODE,
+    DEFAULT_EMAIL_ACTION,
+    DEFAULT_EMAIL_ARCHIVE_FOLDER,
+    DEFAULT_NOTIFY_ON_FAILURE,
+    DEFAULT_NOTIFY_ON_SUCCESS,
     DEFAULT_QUEUE_FOLDER,
     DOMAIN,
     DUPLEX_MODES,
+    EMAIL_ACTIONS,
 )
 
 logger = logging.getLogger(__name__)
@@ -298,6 +307,7 @@ class AutoPrintOptionsFlow(OptionsFlow):
                     CONF_BOOKLET_PATTERNS: patterns,
                     CONF_ALLOWED_SENDERS: senders,
                     CONF_FOLDER_FILTER: folders,
+                    # Boolean / select fields are stored as-is
                 },
             )
 
@@ -340,6 +350,34 @@ class AutoPrintOptionsFlow(OptionsFlow):
             schema_dict[
                 vol.Optional("imap_account", default=_SENTINEL_SKIP_IMAP)
             ] = vol.In(_imap_choices(imap_entries))
+
+        # ── Email post-processing ──────────────────────────────────────────
+        schema_dict[
+            vol.Required(
+                CONF_EMAIL_ACTION,
+                default=options.get(CONF_EMAIL_ACTION, DEFAULT_EMAIL_ACTION),
+            )
+        ] = vol.In(EMAIL_ACTIONS)
+        schema_dict[
+            vol.Required(
+                CONF_EMAIL_ARCHIVE_FOLDER,
+                default=options.get(CONF_EMAIL_ARCHIVE_FOLDER, DEFAULT_EMAIL_ARCHIVE_FOLDER),
+            )
+        ] = str
+
+        # ── Notifications ─────────────────────────────────────────────────
+        schema_dict[
+            vol.Required(
+                CONF_NOTIFY_ON_FAILURE,
+                default=options.get(CONF_NOTIFY_ON_FAILURE, DEFAULT_NOTIFY_ON_FAILURE),
+            )
+        ] = bool
+        schema_dict[
+            vol.Required(
+                CONF_NOTIFY_ON_SUCCESS,
+                default=options.get(CONF_NOTIFY_ON_SUCCESS, DEFAULT_NOTIFY_ON_SUCCESS),
+            )
+        ] = bool
 
         return self.async_show_form(
             step_id="init",

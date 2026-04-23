@@ -103,6 +103,10 @@ The form shows a live hint: *"Your IMAP integrations monitor: INBOX (print@examp
 | **Booklet Patterns** | *(empty)* | Filename substrings that trigger booklet page reordering. |
 | **Delete after printing** | On | Remove the PDF from the queue folder after a successful print. |
 | **Print Queue Folder** | `/media/print_queue` | Used by the `print_file` service and queue-depth sensor. |
+| **Email Action after Printing** | Do nothing | What to do with the email after the PDF prints: **Do nothing** / **Mark as read** / **Move to archive folder** / **Delete from server**. |
+| **Archive Folder** | `INBOX/Printed` | Target folder when "Move to archive folder" is selected. Created automatically by most IMAP servers. |
+| **Notify when print fails** | On | Send a HA persistent notification when a job fails (with error details). |
+| **Notify when print succeeds** | Off | Send a HA persistent notification when a job completes successfully. |
 
 ---
 
@@ -317,6 +321,12 @@ A: Auto Print calls `imap.fetch_part` which has no size limit (unlike the 32 KB 
 
 **Q: How do I enable booklet printing?**  
 A: Add a substring of the PDF filename to **Booklet Patterns** in the options (e.g. `Programme`). Any attachment whose filename contains that string is automatically reordered for saddle-stitch printing.
+
+**Q: What happens to the email after it's printed?**  
+A: Configure **Email Action after Printing** in Options: **Mark as read** keeps it in your inbox but removes the unread badge; **Move to archive folder** moves it to `INBOX/Printed` (or a folder you choose) and marks it read; **Delete from server** removes it permanently. Default is **Do nothing** (no change to the email).
+
+**Q: How do I get notified when a print job fails?**  
+A: **Notify when print fails** is enabled by default. A HA persistent notification will appear in the bell (🔔) menu with the filename and error. Enable **Notify when print succeeds** if you also want confirmation of successful prints.
 
 **Q: CUPS is on a different host. What URL do I use?**  
 A: `http://<cups-host-ip>:631`. When using the CUPS add-on on HA OS with host networking, the host IP is your HA LAN address.

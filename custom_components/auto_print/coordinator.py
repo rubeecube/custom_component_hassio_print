@@ -32,11 +32,19 @@ from .const import (
     CONF_BOOKLET_PATTERNS,
     CONF_CUPS_URL,
     CONF_DUPLEX_MODE,
+    CONF_EMAIL_ACTION,
+    CONF_EMAIL_ARCHIVE_FOLDER,
     CONF_FOLDER_FILTER,
+    CONF_NOTIFY_ON_FAILURE,
+    CONF_NOTIFY_ON_SUCCESS,
     CONF_PRINTER_NAME,
     CONF_QUEUE_FOLDER,
     DEFAULT_AUTO_DELETE,
     DEFAULT_DUPLEX_MODE,
+    DEFAULT_EMAIL_ACTION,
+    DEFAULT_EMAIL_ARCHIVE_FOLDER,
+    DEFAULT_NOTIFY_ON_FAILURE,
+    DEFAULT_NOTIFY_ON_SUCCESS,
     DEFAULT_QUEUE_FOLDER,
     DOMAIN,
     EVENT_JOB_COMPLETED,
@@ -144,6 +152,22 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         """IMAP folder names to accept; empty list means accept all folders."""
         return [f.strip() for f in self._entry.options.get(CONF_FOLDER_FILTER, []) if f.strip()]
 
+    @property
+    def _email_action(self) -> str:
+        return self._entry.options.get(CONF_EMAIL_ACTION, DEFAULT_EMAIL_ACTION)
+
+    @property
+    def _email_archive_folder(self) -> str:
+        return self._entry.options.get(CONF_EMAIL_ARCHIVE_FOLDER, DEFAULT_EMAIL_ARCHIVE_FOLDER)
+
+    @property
+    def _notify_on_failure(self) -> bool:
+        return bool(self._entry.options.get(CONF_NOTIFY_ON_FAILURE, DEFAULT_NOTIFY_ON_FAILURE))
+
+    @property
+    def _notify_on_success(self) -> bool:
+        return bool(self._entry.options.get(CONF_NOTIFY_ON_SUCCESS, DEFAULT_NOTIFY_ON_SUCCESS))
+
     # ------------------------------------------------------------------
     # IMAP event handler
     # ------------------------------------------------------------------
@@ -169,10 +193,12 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         entry_id: str = event.data.get("entry_id", "")
         uid: str = str(event.data.get("uid", ""))
 
+        had_pdf = False
         for part_key, part_info in parts.items():
             if part_info.get("content_type") != "application/pdf":
                 continue
 
+            had_pdf = True
             filename: str = (
                 part_info.get("filename")
                 or part_info.get("file_name")
@@ -186,6 +212,10 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 sender=sender,
             )
             self._record_job(result)
+            await self._async_notify_job(result)
+
+        if had_pdf:
+            await self._async_post_process_email(entry_id, uid)
 
         if parts:
             await self.async_request_refresh()
@@ -247,6 +277,80 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
     # ------------------------------------------------------------------
     # Public helpers (called from services / button entity)
     # ------------------------------------------------------------------
+
+    async def _async_post_process_email(self, entry_id: str, uid: str) -> None:
+        """Apply the configured post-print email action via HA's IMAP actions."""
+        action = self._email_action
+        if action == "none":
+            return
+
+        try:
+            if action == "mark_seen":
+                await self.hass.services.async_call(
+                    "imap", "seen",
+                    {"entry_id": entry_id, "uid": uid},
+                    blocking=True,
+                )
+            elif action == "move":
+                await self.hass.services.async_call(
+                    "imap", "move",
+                    {
+                        "entry_id": entry_id,
+                        "uid": uid,
+                        "target_folder": self._email_archive_folder,
+                        "seen": True,
+                    },
+                    blocking=True,
+                )
+            elif action == "delete":
+                await self.hass.services.async_call(
+                    "imap", "delete",
+                    {"entry_id": entry_id, "uid": uid},
+                    blocking=True,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Email post-processing action '%s' failed for uid=%s: %s",
+                action, uid, exc,
+            )
+
+    async def _async_notify_job(self, result: PrintJobResult) -> None:
+        """Send a HA persistent notification based on job outcome and settings."""
+        if result.success and not self._notify_on_success:
+            return
+        if not result.success and not self._notify_on_failure:
+            return
+
+        if result.success:
+            title = f"Auto Print — Printed successfully"
+            message = f"**{result.filename}**"
+            if result.sender:
+                message += f"\nFrom: {result.sender}"
+            if result.duplex:
+                message += f"\nDuplex: {result.duplex}"
+            if result.booklet:
+                message += "\nBooklet mode"
+        else:
+            title = "Auto Print — Print failed"
+            message = f"**{result.filename}** could not be printed."
+            if result.error:
+                message += f"\nError: {result.error}"
+            if result.sender:
+                message += f"\nFrom: {result.sender}"
+            message += "\n\nCheck the HA logs or the Auto Print sensor for details."
+
+        try:
+            await self.hass.services.async_call(
+                "persistent_notification",
+                "create",
+                {
+                    "title": title,
+                    "message": message,
+                    "notification_id": f"auto_print_{self._entry.entry_id}_{result.timestamp}",
+                },
+            )
+        except Exception:
+            logger.warning("Could not send notification for job '%s'", result.filename)
 
     async def async_process_imap_part(
         self,
