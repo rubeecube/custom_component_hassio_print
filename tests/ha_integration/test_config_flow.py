@@ -1,10 +1,10 @@
 """Config flow tests for the Auto Print integration.
 
 Golden rules applied:
-  - Happy path: user step → printer step → entry created.
-  - Each error branch in both steps is covered and recovery is verified.
-  - Duplicate unique-id is rejected (abort).
-  - Options flow: existing values pre-populated, updates persisted.
+  - Happy path: single "user" step → entry created.
+  - CUPS unreachable → error shown → user can recover and complete.
+  - Duplicate unique-id → aborted.
+  - Options flow: persists all fields; allowed_senders stored as list.
 """
 
 from __future__ import annotations
@@ -19,23 +19,9 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.auto_print.const import DOMAIN
 
-from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS, _make_cups_session
 
 _STEP1_INPUT = {
-    "imap_server": "imap.example.com",
-    "imap_port": 993,
-    "imap_use_ssl": True,
-    "imap_username": "print@example.com",
-    "imap_password": "secret",
-    "imap_folder": "INBOX",
-    "allowed_senders": "sender@example.com",   # text area — one per line
-}
-
-_STEP2_INPUT = {
     "cups_url": "http://10.0.0.1:631",
     "printer_name": "TestPrinter",
 }
@@ -47,11 +33,10 @@ _STEP2_INPUT = {
 
 async def test_full_flow_creates_entry(
     hass: HomeAssistant,
-    mock_imap_ok,
     mock_cups_ok,
     mock_setup_entry,
 ) -> None:
-    """Test that a complete, valid config flow creates a config entry."""
+    """A complete valid flow must create a config entry in one step."""
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_USER}
     )
@@ -61,23 +46,14 @@ async def test_full_flow_creates_entry(
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], _STEP1_INPUT
     )
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "printer"
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], _STEP2_INPUT
-    )
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"]["imap_server"] == "imap.example.com"
+    assert result["data"]["cups_url"] == "http://10.0.0.1:631"
     assert result["data"]["printer_name"] == "TestPrinter"
-    # Allowed senders must be stored as a list, not the raw text.
-    assert result["data"]["allowed_senders"] == ["sender@example.com"]
     mock_setup_entry.assert_called_once()
 
 
-async def test_entry_title_includes_printer_name(
+async def test_entry_title_contains_printer_name(
     hass: HomeAssistant,
-    mock_imap_ok,
     mock_cups_ok,
     mock_setup_entry,
 ) -> None:
@@ -86,129 +62,41 @@ async def test_entry_title_includes_printer_name(
     )
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], _STEP1_INPUT
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], _STEP2_INPUT
     )
     assert "TestPrinter" in result["title"]
 
 
 # ---------------------------------------------------------------------------
-# Step 1 (IMAP) error branches — user must be able to recover and complete
+# CUPS error branch — error shown, user can recover
 # ---------------------------------------------------------------------------
 
-async def test_step_user_imap_cannot_connect(
+async def test_cups_unreachable_shows_error_then_recovers(
     hass: HomeAssistant,
-    mock_cups_ok,
     mock_setup_entry,
 ) -> None:
-    """Connection error on step 1 shows an error; the form is re-shown."""
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_USER}
     )
 
-    # First attempt: IMAP server unreachable.
-    with patch(
-        "custom_components.auto_print.config_flow._test_imap_connection",
-        return_value="cannot_connect_imap",
-    ):
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], _STEP1_INPUT
-        )
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "user"
-    assert result["errors"]["base"] == "cannot_connect_imap"
-
-    # Recovery: fix the server → flow continues.
-    with patch(
-        "custom_components.auto_print.config_flow._test_imap_connection",
-        return_value=None,
-    ):
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], _STEP1_INPUT
-        )
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "printer"
-
-
-async def test_step_user_imap_invalid_auth(
-    hass: HomeAssistant,
-    mock_setup_entry,
-) -> None:
-    """Auth failure on step 1 shows invalid_auth error."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
-    with patch(
-        "custom_components.auto_print.config_flow._test_imap_connection",
-        return_value="invalid_auth",
-    ):
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], _STEP1_INPUT
-        )
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"]["base"] == "invalid_auth"
-
-
-async def test_step_user_empty_senders_shows_error(
-    hass: HomeAssistant,
-    mock_setup_entry,
-) -> None:
-    """An empty allowed_senders field must show a validation error."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
-    bad_input = {**_STEP1_INPUT, "allowed_senders": "   \n   "}
-    with patch(
-        "custom_components.auto_print.config_flow._test_imap_connection",
-        return_value=None,
-    ):
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], bad_input
-        )
-    assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "user"
-    assert "allowed_senders" in result["errors"]
-
-
-# ---------------------------------------------------------------------------
-# Step 2 (CUPS) error branch — recovery also tested
-# ---------------------------------------------------------------------------
-
-async def test_step_printer_cups_unreachable(
-    hass: HomeAssistant,
-    mock_imap_ok,
-    mock_setup_entry,
-) -> None:
-    """CUPS unreachable on step 2 shows an error; re-entering works."""
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": SOURCE_USER}
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], _STEP1_INPUT
-    )
-    assert result["step_id"] == "printer"
-
-    # First attempt: CUPS down.
+    # First attempt — CUPS is down.
     with patch(
         "custom_components.auto_print.config_flow.async_get_clientsession",
-        side_effect=Exception("refused"),
+        side_effect=__import__("aiohttp").ClientError("refused"),
     ):
         result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], _STEP2_INPUT
+            result["flow_id"], _STEP1_INPUT
         )
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "printer"
+    assert result["step_id"] == "user"
     assert result["errors"]["base"] == "cannot_connect_cups"
 
-    # Recovery: CUPS comes back up.
-    from .conftest import _make_cups_session
+    # Recovery — CUPS comes back.
     with patch(
         "custom_components.auto_print.config_flow.async_get_clientsession",
         return_value=_make_cups_session(200),
     ):
         result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], _STEP2_INPUT
+            result["flow_id"], _STEP1_INPUT
         )
     assert result["type"] is FlowResultType.CREATE_ENTRY
 
@@ -217,34 +105,26 @@ async def test_step_printer_cups_unreachable(
 # Duplicate entry is rejected
 # ---------------------------------------------------------------------------
 
-async def test_duplicate_entry_is_aborted(
+async def test_duplicate_entry_aborted(
     hass: HomeAssistant,
-    mock_imap_ok,
     mock_cups_ok,
     mock_setup_entry,
 ) -> None:
-    """Setting up the same IMAP account twice must abort with already_configured."""
-    # First entry.
+    # First setup.
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_USER}
     )
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], _STEP1_INPUT
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], _STEP2_INPUT
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
 
-    # Second attempt with the same username@server.
+    # Second attempt with same CUPS URL + printer name.
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_USER}
     )
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], _STEP1_INPUT
-    )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], _STEP2_INPUT
     )
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "already_configured"
@@ -254,58 +134,60 @@ async def test_duplicate_entry_is_aborted(
 # Options flow
 # ---------------------------------------------------------------------------
 
-async def test_options_flow_updates_options(
+async def test_options_flow_persists_all_fields(
     hass: HomeAssistant,
     mock_coordinator_update,
 ) -> None:
-    """Options flow must persist the new values to config_entry.options."""
-    entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS)
+    entry = MockConfigEntry(
+        domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS
+    )
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == "init"
 
-    new_options_input = {
+    new_input = {
+        "allowed_senders": "a@example.com\nb@example.com",
         "duplex_mode": "one-sided",
         "booklet_patterns": "Au Puits\nBulletin",
         "auto_delete": False,
-        "queue_folder": "/tmp/queue2",
-        "poll_interval_minutes": 5,
+        "queue_folder": "/tmp/q2",
     }
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], new_options_input
+        result["flow_id"], new_input
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entry.options["duplex_mode"] == "one-sided"
-    # booklet_patterns must be stored as a list.
+    # Senders and patterns must be stored as lists, not raw strings.
+    assert entry.options["allowed_senders"] == ["a@example.com", "b@example.com"]
     assert entry.options["booklet_patterns"] == ["Au Puits", "Bulletin"]
+    assert entry.options["duplex_mode"] == "one-sided"
     assert entry.options["auto_delete"] is False
-    assert entry.options["poll_interval_minutes"] == 5
 
 
-async def test_options_flow_rejects_poll_interval_below_1(
+async def test_options_flow_empty_senders_means_accept_all(
     hass: HomeAssistant,
     mock_coordinator_update,
 ) -> None:
-    """Poll interval < 1 minute must show a validation error."""
-    entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS)
+    """An empty allowed_senders field is valid — it means accept all senders."""
+    entry = MockConfigEntry(
+        domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS
+    )
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
-    bad_input = {
-        "duplex_mode": "one-sided",
+    new_input = {
+        "allowed_senders": "   ",   # whitespace only → empty list
+        "duplex_mode": "two-sided-long-edge",
         "booklet_patterns": "",
         "auto_delete": True,
         "queue_folder": "/tmp/q",
-        "poll_interval_minutes": 0,   # invalid
     }
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], bad_input
+        result["flow_id"], new_input
     )
-    assert result["type"] is FlowResultType.FORM
-    assert "poll_interval_minutes" in result["errors"]
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["allowed_senders"] == []

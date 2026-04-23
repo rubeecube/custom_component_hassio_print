@@ -1,4 +1,9 @@
-"""Auto Print integration setup."""
+"""Auto Print integration setup.
+
+Architecture: this component subscribes to imap_content events fired by HA's
+built-in IMAP integration.  When a PDF attachment is detected it calls
+imap.fetch_part to retrieve the bytes and sends them to CUPS via IPP.
+"""
 
 from __future__ import annotations
 
@@ -6,14 +11,13 @@ import logging
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 
 from .const import (
     CONF_DUPLEX_MODE,
-    DATA_COORDINATOR,
     DOMAIN,
     DUPLEX_MODES,
     FIELD_BOOKLET,
@@ -36,56 +40,67 @@ _PRINT_FILE_SCHEMA = vol.Schema(
     }
 )
 
+# Type alias for config entries carrying AutoPrintCoordinator as runtime data.
+type AutoPrintConfigEntry = ConfigEntry[AutoPrintCoordinator]
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+
+async def async_setup_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) -> bool:
     """Set up Auto Print from a config entry."""
     coordinator = AutoPrintCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
-        DATA_COORDINATOR: coordinator,
-    }
+    # Store coordinator as runtime_data (HA 2024+ recommended pattern).
+    entry.runtime_data = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Register services once (guard against duplicate registration on reload).
+    # Subscribe to imap_content events from HA's built-in IMAP integration.
+    entry.async_on_unload(
+        hass.bus.async_listen("imap_content", coordinator.async_handle_imap_event)
+    )
+
+    # Register domain-level services once; guard against duplicate registration.
     if not hass.services.has_service(DOMAIN, SERVICE_PRINT_FILE):
         _register_services(hass)
 
-    # Re-create services on options update so coordinators pick up new settings.
+    # Reload when options change so the event filter picks up new senders.
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) -> bool:
     """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id, None)
 
-    # Remove services only when no entries remain.
-    if not hass.data.get(DOMAIN):
-        hass.services.async_remove(DOMAIN, SERVICE_PRINT_FILE)
-        hass.services.async_remove(DOMAIN, SERVICE_CLEAR_QUEUE)
+    # Remove services only when no entries remain loaded.
+    if unload_ok:
+        remaining = [
+            e
+            for e in hass.config_entries.async_entries(DOMAIN)
+            if e.entry_id != entry.entry_id
+            and e.state is ConfigEntryState.LOADED
+        ]
+        if not remaining:
+            hass.services.async_remove(DOMAIN, SERVICE_PRINT_FILE)
+            hass.services.async_remove(DOMAIN, SERVICE_CLEAR_QUEUE)
 
     return unload_ok
 
 
-async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload entry when options change so the coordinator picks up the new poll interval."""
+async def _async_update_listener(hass: HomeAssistant, entry: AutoPrintConfigEntry) -> None:
+    """Reload the entry so options changes take effect immediately."""
     await hass.config_entries.async_reload(entry.entry_id)
 
 
 def _register_services(hass: HomeAssistant) -> None:
-    """Register the integration-level services."""
+    """Register integration-level services."""
 
     async def _handle_print_file(call: ServiceCall) -> None:
         file_path: str = call.data[FIELD_FILE_PATH]
         duplex: str | None = call.data.get(FIELD_DUPLEX)
         booklet: bool = call.data.get(FIELD_BOOKLET, False)
 
-        # Dispatch to the first available coordinator.
         coordinator = _get_any_coordinator(hass)
         result = await coordinator.async_print_file(file_path, duplex, booklet)
         if not result.success:
@@ -99,18 +114,14 @@ def _register_services(hass: HomeAssistant) -> None:
         logger.debug("Cleared %d file(s) from the print queue", deleted)
 
     hass.services.async_register(
-        DOMAIN,
-        SERVICE_PRINT_FILE,
-        _handle_print_file,
-        schema=_PRINT_FILE_SCHEMA,
+        DOMAIN, SERVICE_PRINT_FILE, _handle_print_file, schema=_PRINT_FILE_SCHEMA
     )
     hass.services.async_register(DOMAIN, SERVICE_CLEAR_QUEUE, _handle_clear_queue)
 
 
 def _get_any_coordinator(hass: HomeAssistant) -> AutoPrintCoordinator:
-    """Return the coordinator for the first loaded config entry."""
-    entries = hass.data.get(DOMAIN, {})
-    if not entries:
-        raise HomeAssistantError("Auto Print is not configured")
-    entry_data = next(iter(entries.values()))
-    return entry_data[DATA_COORDINATOR]
+    """Return the coordinator for the first loaded Auto Print entry."""
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.state is ConfigEntryState.LOADED and entry.runtime_data is not None:
+            return entry.runtime_data  # type: ignore[return-value]
+    raise HomeAssistantError("Auto Print is not configured or not yet loaded")

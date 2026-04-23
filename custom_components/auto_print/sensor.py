@@ -7,6 +7,7 @@ import logging
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceEntryType
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -15,7 +16,6 @@ from .const import (
     ATTR_LAST_FILENAME,
     ATTR_LAST_STATUS,
     CONF_PRINTER_NAME,
-    DATA_COORDINATOR,
     DOMAIN,
     SENSOR_LAST_JOB,
     SENSOR_QUEUE_DEPTH,
@@ -30,7 +30,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: AutoPrintCoordinator = hass.data[DOMAIN][entry.entry_id][DATA_COORDINATOR]
+    coordinator: AutoPrintCoordinator = entry.runtime_data
     async_add_entities(
         [
             QueueDepthSensor(coordinator, entry),
@@ -44,8 +44,8 @@ def _device_info(entry: ConfigEntry) -> DeviceInfo:
         identifiers={(DOMAIN, entry.entry_id)},
         name=f"Auto Print — {entry.data[CONF_PRINTER_NAME]}",
         manufacturer="Auto Print",
-        model="IMAP → IPP Bridge",
-        entry_type="service",  # type: ignore[arg-type]
+        model="Email → IPP Bridge",
+        entry_type=DeviceEntryType.SERVICE,
     )
 
 

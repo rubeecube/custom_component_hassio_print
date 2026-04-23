@@ -1,28 +1,28 @@
 """DataUpdateCoordinator for the Auto Print integration.
 
 Responsibilities:
-  - Poll the IMAP server for new PDF emails from allowed senders.
-  - Save PDFs to the configured queue folder.
+  - Listen for imap_content events fired by HA's built-in IMAP integration.
+  - For each PDF attachment, call imap.fetch_part to retrieve the bytes.
   - Optionally reorder pages for booklet printing.
-  - Send the print job to CUPS via a raw IPP request (aiohttp).
-  - Optionally delete the file after a successful print.
-  - Track queue depth, last job status, and printer reachability.
+  - Send the print job to CUPS via a raw IPP/2.0 request (aiohttp).
+  - Periodically check printer reachability and count queued files.
 """
 
 from __future__ import annotations
 
-import asyncio
+import base64
 import logging
 import os
 from dataclasses import dataclass, field
 from datetime import timedelta
+from typing import Any
 
 import aiohttp
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .booklet_maker import create_booklet
 from .const import (
@@ -31,25 +31,19 @@ from .const import (
     CONF_BOOKLET_PATTERNS,
     CONF_CUPS_URL,
     CONF_DUPLEX_MODE,
-    CONF_IMAP_FOLDER,
-    CONF_IMAP_PASSWORD,
-    CONF_IMAP_PORT,
-    CONF_IMAP_SERVER,
-    CONF_IMAP_USE_SSL,
-    CONF_IMAP_USERNAME,
-    CONF_POLL_INTERVAL_MINUTES,
     CONF_PRINTER_NAME,
     CONF_QUEUE_FOLDER,
     DEFAULT_AUTO_DELETE,
     DEFAULT_DUPLEX_MODE,
-    DEFAULT_POLL_INTERVAL_MINUTES,
     DEFAULT_QUEUE_FOLDER,
     DOMAIN,
 )
-from .imap_handler import PdfAttachment, fetch_pdf_attachments
 from .print_handler import build_ipp_packet, determine_sides, is_booklet_job
 
 logger = logging.getLogger(__name__)
+
+# Printer-status check interval (not used for IMAP — that is event-driven).
+_STATUS_INTERVAL = timedelta(minutes=5)
 
 
 @dataclass
@@ -63,46 +57,30 @@ class PrintJobResult:
 
 @dataclass
 class AutoPrintData:
-    """Snapshot of integration state, stored in the coordinator."""
+    """Snapshot of integration state exposed to entities."""
 
     queue_depth: int = 0
     printer_online: bool = False
     last_job: PrintJobResult | None = None
-    # Accumulated history — most recent first, capped at 20 entries.
     job_history: list[PrintJobResult] = field(default_factory=list)
 
 
 class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
-    """Manages IMAP polling, printing, and state for one config entry."""
+    """Manages event-driven printing and periodic printer-status checks."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        poll_minutes: int = entry.options.get(
-            CONF_POLL_INTERVAL_MINUTES, DEFAULT_POLL_INTERVAL_MINUTES
-        )
         super().__init__(
             hass,
             logger,
             name=f"{DOMAIN}_{entry.entry_id}",
-            update_interval=timedelta(minutes=poll_minutes),
+            update_interval=_STATUS_INTERVAL,
         )
         self._entry = entry
+        self._job_history: list[PrintJobResult] = []
 
     # ------------------------------------------------------------------
-    # Properties derived from config / options
+    # Properties
     # ------------------------------------------------------------------
-
-    @property
-    def _imap_cfg(self) -> dict:
-        d = self._entry.data
-        return {
-            "server": d[CONF_IMAP_SERVER],
-            "port": d[CONF_IMAP_PORT],
-            "use_ssl": d[CONF_IMAP_USE_SSL],
-            "username": d[CONF_IMAP_USERNAME],
-            "password": d[CONF_IMAP_PASSWORD],
-            "folder": d[CONF_IMAP_FOLDER],
-            "allowed_senders": d[CONF_ALLOWED_SENDERS],
-        }
 
     @property
     def _cups_url(self) -> str:
@@ -111,6 +89,10 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
     @property
     def _printer_name(self) -> str:
         return self._entry.data[CONF_PRINTER_NAME]
+
+    @property
+    def _ipp_endpoint(self) -> str:
+        return f"{self._cups_url}/printers/{self._printer_name}"
 
     @property
     def _duplex_mode(self) -> str:
@@ -129,11 +111,85 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         return self._entry.options.get(CONF_QUEUE_FOLDER, DEFAULT_QUEUE_FOLDER)
 
     @property
-    def _ipp_endpoint(self) -> str:
-        return f"{self._cups_url}/printers/{self._printer_name}"
+    def _allowed_senders(self) -> list[str]:
+        return [s.lower() for s in self._entry.options.get(CONF_ALLOWED_SENDERS, [])]
 
     # ------------------------------------------------------------------
-    # Public helpers (called from services / button)
+    # IMAP event handler — called by hass.bus.async_listen
+    # ------------------------------------------------------------------
+
+    async def async_handle_imap_event(self, event: Event) -> None:
+        """Process an imap_content event from HA's built-in IMAP integration.
+
+        Filters by allowed senders, retrieves each PDF part via
+        imap.fetch_part, decodes it, and prints to CUPS.
+        """
+        sender: str = event.data.get("sender", "").lower()
+        allowed = self._allowed_senders
+        if allowed and sender not in allowed:
+            logger.debug("Skipping email from %s (not in allowed_senders)", sender)
+            return
+
+        parts: dict[str, dict[str, Any]] = event.data.get("parts", {})
+        entry_id: str = event.data.get("entry_id", "")
+        uid: str = str(event.data.get("uid", ""))
+
+        for part_key, part_info in parts.items():
+            if part_info.get("content_type") != "application/pdf":
+                continue
+
+            filename: str = (
+                part_info.get("filename")
+                or part_info.get("file_name")
+                or f"document_{part_key}.pdf"
+            )
+            result = await self._async_fetch_and_print(
+                entry_id=entry_id, uid=uid, part_key=part_key, filename=filename
+            )
+            self._record_job(result)
+
+        if parts:
+            await self.async_request_refresh()
+
+    async def _async_fetch_and_print(
+        self, entry_id: str, uid: str, part_key: str, filename: str
+    ) -> PrintJobResult:
+        """Fetch one attachment via imap.fetch_part and print it."""
+        try:
+            response: dict[str, Any] = await self.hass.services.async_call(
+                "imap",
+                "fetch_part",
+                {"entry_id": entry_id, "uid": uid, "part": part_key},
+                blocking=True,
+                return_response=True,
+            )
+        except Exception as exc:
+            logger.error(
+                "imap.fetch_part failed for uid=%s part=%s: %s", uid, part_key, exc
+            )
+            return PrintJobResult(filename=filename, success=False, error=str(exc))
+
+        try:
+            raw: str = response["part_data"]
+            encoding: str = response.get("content_transfer_encoding", "base64").lower()
+            if encoding == "base64":
+                pdf_bytes = base64.b64decode(raw)
+            else:
+                # 7bit / 8bit / binary — data is already plain text/bytes
+                pdf_bytes = (
+                    raw.encode("latin-1") if isinstance(raw, str) else bytes(raw)
+                )
+        except Exception as exc:
+            logger.error("Decoding attachment '%s' failed: %s", filename, exc)
+            return PrintJobResult(filename=filename, success=False, error=str(exc))
+
+        booklet = is_booklet_job(filename, self._booklet_patterns)
+        return await self.async_send_print_job(
+            filename, pdf_bytes, self._duplex_mode, booklet
+        )
+
+    # ------------------------------------------------------------------
+    # Public helpers (called from services / button entity)
     # ------------------------------------------------------------------
 
     async def async_print_file(
@@ -142,7 +198,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         duplex_mode: str | None = None,
         force_booklet: bool = False,
     ) -> PrintJobResult:
-        """Print an existing file on disk and return the result."""
+        """Print a PDF file from disk and return the result."""
         filename = os.path.basename(file_path)
         effective_duplex = duplex_mode or self._duplex_mode
         booklet = force_booklet or is_booklet_job(filename, self._booklet_patterns)
@@ -153,12 +209,15 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         except OSError as exc:
             return PrintJobResult(filename=filename, success=False, error=str(exc))
 
-        return await self._async_send_print_job(
+        result = await self.async_send_print_job(
             filename, pdf_data, effective_duplex, booklet
         )
+        self._record_job(result)
+        await self.async_request_refresh()
+        return result
 
     async def async_clear_queue(self) -> int:
-        """Delete all PDF files in the queue folder. Returns the number deleted."""
+        """Delete all PDFs in the configured queue folder."""
         folder = self._queue_folder
         deleted = 0
         try:
@@ -174,98 +233,10 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         await self.async_request_refresh()
         return deleted
 
-    # ------------------------------------------------------------------
-    # Coordinator update
-    # ------------------------------------------------------------------
-
-    async def _async_update_data(self) -> AutoPrintData:
-        """Poll IMAP for new jobs, print them, and return current state."""
-        previous = self.data or AutoPrintData()
-
-        printer_online = await self._async_check_printer_online()
-
-        new_jobs: list[PrintJobResult] = []
-        if printer_online:
-            new_jobs = await self._async_process_new_emails()
-        else:
-            logger.warning("Printer offline — skipping IMAP poll this cycle")
-
-        history = (new_jobs + previous.job_history)[:20]
-        last_job = history[0] if history else None
-        queue_depth = self._count_queue_files()
-
-        return AutoPrintData(
-            queue_depth=queue_depth,
-            printer_online=printer_online,
-            last_job=last_job,
-            job_history=history,
-        )
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    async def _async_check_printer_online(self) -> bool:
-        """Return True if the CUPS server responds to a HEAD request."""
-        session = async_get_clientsession(self.hass)
-        try:
-            async with session.head(self._cups_url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                return resp.status < 500
-        except Exception:
-            return False
-
-    async def _async_process_new_emails(self) -> list[PrintJobResult]:
-        """Fetch PDFs from IMAP and print them; return one result per attachment."""
-        cfg = self._imap_cfg
-        attachments: list[PdfAttachment] = await self.hass.async_add_executor_job(
-            fetch_pdf_attachments,
-            cfg["server"],
-            cfg["port"],
-            cfg["use_ssl"],
-            cfg["username"],
-            cfg["password"],
-            cfg["folder"],
-            cfg["allowed_senders"],
-        )
-
-        if not attachments:
-            return []
-
-        results = await asyncio.gather(
-            *[self._async_handle_attachment(att) for att in attachments],
-            return_exceptions=False,
-        )
-        return list(results)
-
-    async def _async_handle_attachment(self, att: PdfAttachment) -> PrintJobResult:
-        """Save, optionally convert, print, and optionally delete one attachment."""
-        queue_folder = self._queue_folder
-        os.makedirs(queue_folder, exist_ok=True)
-        file_path = os.path.join(queue_folder, att.filename)
-
-        try:
-            with open(file_path, "wb") as f:
-                f.write(att.data)
-        except OSError as exc:
-            return PrintJobResult(filename=att.filename, success=False, error=str(exc))
-
-        booklet = is_booklet_job(att.filename, self._booklet_patterns)
-        result = await self._async_send_print_job(
-            att.filename, att.data, self._duplex_mode, booklet
-        )
-
-        if self._auto_delete or result.success:
-            try:
-                os.remove(file_path)
-            except OSError:
-                logger.warning("Could not remove '%s' after printing", file_path)
-
-        return result
-
-    async def _async_send_print_job(
+    async def async_send_print_job(
         self, filename: str, pdf_data: bytes, duplex_mode: str, booklet: bool
     ) -> PrintJobResult:
-        """Build the IPP packet and POST it to CUPS. Returns a PrintJobResult."""
+        """Build an IPP packet and POST it to CUPS."""
         if booklet:
             try:
                 pdf_data = await self.hass.async_add_executor_job(
@@ -288,7 +259,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             ) as resp:
                 body = await resp.text(errors="replace")
                 if resp.status == 200 and "<!DOCTYPE HTML>" not in body:
-                    logger.debug("Print job accepted for '%s' (sides=%s)", filename, sides)
+                    logger.debug(
+                        "Print job accepted for '%s' (sides=%s)", filename, sides
+                    )
                     return PrintJobResult(filename=filename, success=True)
 
                 error = f"HTTP {resp.status}"
@@ -299,8 +272,39 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             logger.error("Network error printing '%s': %s", filename, exc)
             return PrintJobResult(filename=filename, success=False, error=str(exc))
 
+    # ------------------------------------------------------------------
+    # Coordinator periodic update (printer status only)
+    # ------------------------------------------------------------------
+
+    async def _async_update_data(self) -> AutoPrintData:
+        """Check printer reachability and queue depth."""
+        printer_online = await self._async_check_printer_online()
+        queue_depth = self._count_queue_files()
+        last_job = self._job_history[0] if self._job_history else None
+        return AutoPrintData(
+            queue_depth=queue_depth,
+            printer_online=printer_online,
+            last_job=last_job,
+            job_history=list(self._job_history),
+        )
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    async def _async_check_printer_online(self) -> bool:
+        """Return True if the CUPS server responds to a HEAD request."""
+        session = async_get_clientsession(self.hass)
+        try:
+            async with session.head(
+                self._cups_url, timeout=aiohttp.ClientTimeout(total=5)
+            ) as resp:
+                return resp.status < 500
+        except Exception:
+            return False
+
     def _count_queue_files(self) -> int:
-        """Count PDF files currently sitting in the queue folder."""
+        """Count PDF files sitting in the queue folder."""
         try:
             return sum(
                 1
@@ -309,3 +313,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             )
         except OSError:
             return 0
+
+    def _record_job(self, result: PrintJobResult) -> None:
+        """Prepend a result to the job history (capped at 20 entries)."""
+        self._job_history = ([result] + self._job_history)[:20]

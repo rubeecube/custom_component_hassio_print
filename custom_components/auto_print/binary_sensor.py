@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import BINARY_SENSOR_PRINTER_ONLINE, DATA_COORDINATOR, DOMAIN
+from .const import BINARY_SENSOR_PRINTER_ONLINE, DOMAIN
 from .coordinator import AutoPrintCoordinator
 from .sensor import _device_info
 
@@ -25,7 +25,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: AutoPrintCoordinator = hass.data[DOMAIN][entry.entry_id][DATA_COORDINATOR]
+    coordinator: AutoPrintCoordinator = entry.runtime_data
     async_add_entities([PrinterOnlineSensor(coordinator, entry)])
 
 

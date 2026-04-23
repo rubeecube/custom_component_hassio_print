@@ -1,0 +1,37 @@
+# Minimal HA configuration for the Auto Print validation stack.
+#
+# After starting the stack with docker compose up -d:
+#
+# 1. Open http://localhost:8123 and finish the onboarding wizard.
+#
+# 2. Add the HA IMAP integration (built-in):
+#    Settings → Integrations → Add → IMAP
+#      Server:   localhost       (GreenMail listens on host port 3143)
+#      Port:     3143
+#      SSL:      Off             (GreenMail uses plain IMAP on 3143)
+#      Username: test@test.example.com
+#      Password: test
+#    In advanced mode, disable IMAP-Push (GreenMail does not support IDLE).
+#
+# 3. Add the Auto Print integration:
+#    Settings → Integrations → Add → Auto Print
+#      CUPS URL:      http://localhost:631
+#      Printer Name:  TestPrinter
+#
+# 4. In Auto Print options, add test@test.example.com to Allowed Senders.
+#
+# 5. Run ./validate.sh from the docker/ directory.
+
+homeassistant:
+  name: Auto Print Validation
+  unit_system: metric
+  time_zone: Europe/Paris
+
+# Allow loading custom components from /config/custom_components/
+# (no extra config needed — HA discovers them automatically)
+
+logger:
+  default: warning
+  logs:
+    custom_components.auto_print: debug
+    homeassistant.components.imap: info

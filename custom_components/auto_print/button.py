@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 import logging
 
 from homeassistant.components.button import ButtonEntity
@@ -12,7 +11,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import BUTTON_TEST_PAGE, DATA_COORDINATOR, DOMAIN
+from .const import BUTTON_TEST_PAGE, DOMAIN
 from .coordinator import AutoPrintCoordinator
 from .sensor import _device_info
 
@@ -49,7 +48,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: AutoPrintCoordinator = hass.data[DOMAIN][entry.entry_id][DATA_COORDINATOR]
+    coordinator: AutoPrintCoordinator = entry.runtime_data
     async_add_entities([TestPageButton(coordinator, entry)])
 
 
@@ -67,13 +66,11 @@ class TestPageButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):
 
     async def async_press(self) -> None:
         """Send the built-in test page to the printer."""
-        result = await self.coordinator._async_send_print_job(
+        result = await self.coordinator.async_send_print_job(
             filename="auto_print_test_page.pdf",
             pdf_data=_TEST_PAGE_CONTENT,
             duplex_mode="one-sided",
             booklet=False,
         )
         if not result.success:
-            raise HomeAssistantError(
-                f"Test page failed: {result.error}"
-            )
+            raise HomeAssistantError(f"Test page failed: {result.error}")

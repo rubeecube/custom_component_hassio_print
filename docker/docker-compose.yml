@@ -1,0 +1,73 @@
+# Auto Print — self-contained validation stack
+#
+# Services:
+#   homeassistant  HA stable with the auto_print component mounted
+#   greenmail      Local IMAP + SMTP server (no real mail account needed)
+#   cups           Standalone CUPS with cups-pdf virtual printer
+#
+# Usage:
+#   cp ha-config/secrets.yaml.template ha-config/secrets.yaml
+#   # (edit secrets.yaml — see template for details)
+#   docker compose up -d
+#   # Then run:  ./validate.sh
+#
+# Network: host mode is used for HA so it can reach the LAN printer and
+# the CUPS container at localhost:631 without extra routing config.
+
+services:
+
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: auto_print_ha
+    network_mode: host
+    volumes:
+      - ./ha-config:/config
+      - ../custom_components:/config/custom_components:ro
+      - cups_output:/cups-output:ro
+    environment:
+      - TZ=Europe/Paris
+    restart: unless-stopped
+    depends_on:
+      greenmail:
+        condition: service_healthy
+      cups:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8123/api/"]
+      interval: 10s
+      timeout: 5s
+      retries: 18    # 3 minutes for first HA boot
+
+  greenmail:
+    image: greenmail/standalone:2.0.0
+    container_name: auto_print_greenmail
+    ports:
+      - "3025:3025"   # SMTP — validate.sh injects test emails here
+      - "3143:3143"   # IMAP — HA's IMAP integration connects here (plain)
+      - "8080:8080"   # REST API — health check + mail inspection
+    environment:
+      - GREENMAIL_OPTS=-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0 -Dgreenmail.users=test:test@test.example.com
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/api/service/readiness"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  cups:
+    build:
+      context: ./cups
+    container_name: auto_print_cups
+    ports:
+      - "631:631"
+    volumes:
+      - cups_output:/var/spool/cups-pdf/ANONYMOUS
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "lpstat", "-h", "localhost", "-r"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  cups_output:
+    driver: local

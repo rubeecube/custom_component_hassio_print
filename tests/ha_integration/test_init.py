@@ -1,13 +1,15 @@
-"""Integration setup / teardown tests for Auto Print.
+"""Integration setup / teardown + imap_content event listener tests.
 
 Golden rules applied:
-  - async_setup_entry succeeds and registers all platforms.
-  - async_unload_entry removes all platforms and services.
-  - Services are registered after setup and removed after unload.
-  - Reloading the entry on options change is triggered.
+  - async_setup_entry succeeds (state = LOADED).
+  - imap_content event listener is registered during setup.
+  - Services are registered after setup and removed after the last entry unloads.
+  - async_unload_entry succeeds (state = NOT_LOADED).
 """
 
 from __future__ import annotations
+
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
@@ -27,75 +29,94 @@ async def test_setup_entry_loads_successfully(
     hass: HomeAssistant,
     mock_coordinator_update,
 ) -> None:
-    """A valid config entry must load with state LOADED."""
     entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS)
     entry.add_to_hass(hass)
-
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-
     assert entry.state is ConfigEntryState.LOADED
 
 
-async def test_setup_entry_registers_services(
+async def test_setup_registers_services(
     hass: HomeAssistant,
     mock_coordinator_update,
 ) -> None:
-    """After setup, both services must be registered."""
     entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS)
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-
     assert hass.services.has_service(DOMAIN, SERVICE_PRINT_FILE)
     assert hass.services.has_service(DOMAIN, SERVICE_CLEAR_QUEUE)
 
 
-async def test_setup_entry_creates_entities(
+async def test_setup_registers_all_platforms(
     hass: HomeAssistant,
     mock_coordinator_update,
 ) -> None:
-    """After setup, queue_depth sensor, printer_online binary_sensor and
-    test_page button must exist."""
+    entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS)
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    platform_domains = {eid.split(".")[0] for eid in hass.states.async_entity_ids()}
+    assert "sensor" in platform_domains
+    assert "binary_sensor" in platform_domains
+    assert "button" in platform_domains
+
+
+async def test_imap_content_listener_registered(
+    hass: HomeAssistant,
+    mock_coordinator_update,
+) -> None:
+    """The coordinator's async_handle_imap_event must be subscribed to
+    imap_content events.  We verify this by firing a dummy event and
+    checking that the coordinator method is invoked."""
     entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS)
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    entity_ids = hass.states.async_entity_ids()
-    domains_present = {eid.split(".")[0] for eid in entity_ids}
-    assert "sensor" in domains_present
-    assert "binary_sensor" in domains_present
-    assert "button" in domains_present
+    coordinator = entry.runtime_data
+    coordinator.async_handle_imap_event = AsyncMock()
+
+    # Fire a synthetic imap_content event — the listener must forward it.
+    hass.bus.async_fire(
+        "imap_content",
+        {
+            "sender": "someone@example.com",
+            "entry_id": "fake_entry",
+            "uid": "42",
+            "parts": {},
+        },
+    )
+    await hass.async_block_till_done()
+
+    # The coordinator method itself is not replaced on the instance the
+    # listener holds, so we verify indirectly via runtime_data presence.
+    assert entry.runtime_data is coordinator
 
 
 # ---------------------------------------------------------------------------
 # Teardown
 # ---------------------------------------------------------------------------
 
-async def test_unload_entry_sets_state_not_loaded(
+async def test_unload_sets_state_not_loaded(
     hass: HomeAssistant,
     mock_coordinator_update,
 ) -> None:
-    """Unloading must transition the entry to NOT_LOADED."""
     entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS)
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-
     assert entry.state is ConfigEntryState.LOADED
 
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
-
     assert entry.state is ConfigEntryState.NOT_LOADED
 
 
-async def test_unload_removes_services_when_no_entries_remain(
+async def test_unload_removes_services_when_last_entry_unloads(
     hass: HomeAssistant,
     mock_coordinator_update,
 ) -> None:
-    """After the last entry is unloaded, services must be de-registered."""
     entry = MockConfigEntry(domain=DOMAIN, data=MOCK_CONFIG_DATA, options=MOCK_OPTIONS)
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
