@@ -9,11 +9,19 @@ build-backend = "setuptools.backends.legacy:build"
 [project]
 name = "print-bridge"
 version = "2.0.0"
-description = "Home Assistant custom component — print PDF email attachments via IMAP + IPP/CUPS"
+description = "Print Bridge: Home Assistant custom component to automatically print PDF email attachments via IMAP events, with direct IPP/AirPrint and CUPS support, booklet printing, schedule, audit log, and retry."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
-keywords = ["home-assistant", "hacs", "printing", "imap", "ipp", "cups", "airprint"]
+keywords = [
+    "home-assistant", "hacs", "home-assistant-custom-component",
+    "printing", "print", "printer",
+    "imap", "email", "email-to-print",
+    "ipp", "cups", "airprint",
+    "pdf", "pdf-printing",
+    "booklet-printing", "duplex",
+    "automation", "lovelace",
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
@@ -21,6 +29,8 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Topic :: Home Automation",
+    "Topic :: Communications :: Email",
+    "Topic :: Printing",
 ]
 
 # Runtime dependency (installed by HA from manifest.json requirements[])
