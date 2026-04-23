@@ -2,20 +2,29 @@
   "config": {
     "step": {
       "user": {
-        "title": "Printer",
-        "description": "Enter the CUPS server details. The HA IMAP integration (configured separately) will deliver email events.",
+        "title": "Printer Setup",
+        "description": "{cups_info}\n\n{imap_info}",
         "data": {
           "cups_url": "CUPS Base URL",
-          "printer_name": "Printer Name (CUPS queue name)"
+          "printer_name": "Printer",
+          "imap_account": "Pre-fill Allowed Senders from IMAP Account"
         },
         "data_description": {
-          "cups_url": "Base URL of your CUPS server, e.g. http://10.0.0.23:631",
-          "printer_name": "The queue name as registered in CUPS, e.g. Canon_MG3600_series"
+          "cups_url": "Base URL of your CUPS server. Discovered value is pre-filled — change if your CUPS is on a different host.",
+          "printer_name": "Select a discovered printer queue, or choose 'Enter name manually…' to type it.",
+          "imap_account": "Select an IMAP account to automatically add its address to Allowed Senders. You can change this later in Options."
+        }
+      },
+      "manual_printer": {
+        "title": "Printer Name",
+        "description": "Enter the CUPS queue name for the printer at **{cups_url}**.\n\nThe queue name is shown in the CUPS web UI under Printers (e.g. `Canon_MG3600_series`).",
+        "data": {
+          "printer_name": "Printer Name (CUPS queue name)"
         }
       }
     },
     "error": {
-      "cannot_connect_cups": "Cannot reach the CUPS server. Check the URL and that the server is running.",
+      "cannot_connect_cups": "Cannot reach the CUPS server. Check that CUPS is running and the URL is correct.",
       "unknown": "Unexpected error — see the Home Assistant logs for details."
     },
     "abort": {
@@ -28,6 +37,7 @@
         "title": "Auto Print Options",
         "data": {
           "allowed_senders": "Allowed Senders (one per line)",
+          "imap_account": "Add sender from IMAP account",
           "duplex_mode": "Default Duplex Mode",
           "booklet_patterns": "Booklet Filename Patterns (one per line)",
           "auto_delete": "Delete PDF from queue after printing",
@@ -35,6 +45,7 @@
         },
         "data_description": {
           "allowed_senders": "Only emails from these addresses trigger a print job. Leave empty to accept all senders.",
+          "imap_account": "Select an account to append its email address to Allowed Senders automatically.",
           "booklet_patterns": "If the PDF filename contains any of these substrings it is printed as a booklet (two-sided short-edge, pages reordered).",
           "queue_folder": "Folder where PDFs are saved when using the print_file service. Must be writable by Home Assistant."
         }
@@ -43,22 +54,14 @@
   },
   "entity": {
     "sensor": {
-      "queue_depth": {
-        "name": "Print Queue Depth"
-      },
-      "last_job": {
-        "name": "Last Print Job"
-      }
+      "queue_depth": { "name": "Print Queue Depth" },
+      "last_job": { "name": "Last Print Job" }
     },
     "binary_sensor": {
-      "printer_online": {
-        "name": "Printer Online"
-      }
+      "printer_online": { "name": "Printer Online" }
     },
     "button": {
-      "test_page": {
-        "name": "Print Test Page"
-      }
+      "test_page": { "name": "Print Test Page" }
     }
   }
 }

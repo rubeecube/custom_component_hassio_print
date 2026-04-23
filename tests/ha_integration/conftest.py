@@ -68,20 +68,31 @@ def mock_coordinator_update():
 # ── CUPS HEAD check mock ───────────────────────────────────────────────────────
 
 def _make_cups_session(status: int = 200) -> MagicMock:
+    """Mock aiohttp session where both HEAD and GET return *status*."""
     resp = MagicMock()
     resp.status = status
     resp.__aenter__ = AsyncMock(return_value=resp)
     resp.__aexit__ = AsyncMock(return_value=False)
+    # GET /printers/ returns empty HTML (no printer names to parse)
+    resp.text = AsyncMock(return_value="<html></html>")
     session = MagicMock()
     session.head.return_value = resp
+    session.get.return_value = resp
     return session
 
 
 @pytest.fixture
 def mock_cups_ok():
-    with patch(
-        "custom_components.auto_print.config_flow.async_get_clientsession",
-        return_value=_make_cups_session(200),
+    """Mock reachable CUPS; patch both _discover_cups and async_get_clientsession."""
+    with (
+        patch(
+            "custom_components.auto_print.config_flow._discover_cups",
+            new=AsyncMock(return_value=(None, [])),
+        ),
+        patch(
+            "custom_components.auto_print.config_flow.async_get_clientsession",
+            return_value=_make_cups_session(200),
+        ),
     ):
         yield
 
@@ -89,9 +100,15 @@ def mock_cups_ok():
 @pytest.fixture
 def mock_cups_unreachable():
     import aiohttp
-    with patch(
-        "custom_components.auto_print.config_flow.async_get_clientsession",
-        side_effect=aiohttp.ClientError("refused"),
+    with (
+        patch(
+            "custom_components.auto_print.config_flow._discover_cups",
+            new=AsyncMock(return_value=(None, [])),
+        ),
+        patch(
+            "custom_components.auto_print.config_flow.async_get_clientsession",
+            side_effect=aiohttp.ClientError("refused"),
+        ),
     ):
         yield
 
