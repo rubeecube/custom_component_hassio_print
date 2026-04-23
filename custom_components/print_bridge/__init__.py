@@ -94,24 +94,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) ->
 
     # First-install notification when auto_print is disabled (default after fresh install).
     if not entry.options.get(CONF_AUTO_PRINT_ENABLED, True):
-        hass.components.persistent_notification.async_create(  # type: ignore[attr-defined]
-            (
-                "**Print Bridge is installed!** \n\n"
-                "Automatic printing is **disabled** until you choose a mode:\n\n"
-                "1. **Simple auto-print** — go to *Settings → Print Bridge → Configure* "
-                "and turn on *Enable automatic printing*.\n"
-                "2. **Blueprint (advanced)** — "
-                "[import the automation blueprint]"
-                "(https://my.home-assistant.io/redirect/blueprint_import"
-                "?url=https%3A%2F%2Fgithub.com%2Frubeecube%2Fha-print-bridge%2Fblob"
-                "%2Fmain%2Fbluprints%2Fautomation%2Fprint_bridge%2Fprint_from_email.yaml) "
-                "for per-sender / per-keyword rules.\n\n"
-                "To add the management dashboard, paste "
-                "`lovelace/print_bridge_audit.yaml` into a new dashboard view."
-            ),
-            title="Print Bridge — Action required",
-            notification_id=f"print_bridge_setup_{entry.entry_id}",
-        )
+        try:
+            from homeassistant.components.persistent_notification import async_create as _pn_create
+            _pn_create(
+                hass,
+                (
+                    "**Print Bridge is installed!** \n\n"
+                    "Automatic printing is **disabled** until you choose a mode:\n\n"
+                    "1. **Simple auto-print** — go to *Settings → Print Bridge → Configure* "
+                    "and turn on *Enable automatic printing*.\n"
+                    "2. **Blueprint (advanced)** — "
+                    "[import the automation blueprint]"
+                    "(https://my.home-assistant.io/redirect/blueprint_import"
+                    "?url=https%3A%2F%2Fgithub.com%2Frubeecube%2Fha-print-bridge%2Fblob"
+                    "%2Fmain%2Fblueprints%2Fautomation%2Fprint_bridge%2Fprint_from_email.yaml) "
+                    "for per-sender / per-keyword rules.\n\n"
+                    "To add the management dashboard, paste "
+                    "`lovelace/print_bridge_audit.yaml` into a new dashboard view."
+                ),
+                title="Print Bridge — Action required",
+                notification_id=f"print_bridge_setup_{entry.entry_id}",
+            )
+        except Exception:
+            logger.debug("Could not create setup notification", exc_info=True)
 
     # Subscribe to imap_content events from HA's built-in IMAP integration.
     entry.async_on_unload(
