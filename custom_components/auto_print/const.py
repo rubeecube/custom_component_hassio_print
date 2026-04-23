@@ -48,8 +48,12 @@ FIELD_BOOKLET = "booklet"
 # ---------------------------------------------------------------------------
 SENSOR_QUEUE_DEPTH = "queue_depth"
 SENSOR_LAST_JOB = "last_job"
+SENSOR_JOB_LOG = "job_log"
 BINARY_SENSOR_PRINTER_ONLINE = "printer_online"
 BUTTON_TEST_PAGE = "test_page"
+
+# Event fired after each print job — appears in HA Logbook
+EVENT_JOB_COMPLETED = "auto_print_job_completed"
 
 # ---------------------------------------------------------------------------
 # State attribute names

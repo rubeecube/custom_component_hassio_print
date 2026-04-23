@@ -5,6 +5,7 @@ Responsibilities:
   - For each PDF attachment, call imap.fetch_part to retrieve the bytes.
   - Optionally reorder pages for booklet printing.
   - Send the print job to CUPS via a raw IPP/2.0 request (aiohttp).
+  - Fire auto_print_job_completed events → HA Logbook audit trail.
   - Periodically check printer reachability and count queued files.
 """
 
@@ -14,7 +15,7 @@ import base64
 import logging
 import os
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import aiohttp
@@ -37,22 +38,28 @@ from .const import (
     DEFAULT_DUPLEX_MODE,
     DEFAULT_QUEUE_FOLDER,
     DOMAIN,
+    EVENT_JOB_COMPLETED,
 )
 from .print_handler import build_ipp_packet, determine_sides, is_booklet_job
 
 logger = logging.getLogger(__name__)
 
-# Printer-status check interval (not used for IMAP — that is event-driven).
 _STATUS_INTERVAL = timedelta(minutes=5)
 
 
 @dataclass
 class PrintJobResult:
-    """Outcome of a single print attempt."""
+    """Outcome of a single print attempt, including audit metadata."""
 
     filename: str
     success: bool
     error: str | None = None
+    sender: str | None = None
+    duplex: str | None = None
+    booklet: bool = False
+    timestamp: str = field(
+        default_factory=lambda: datetime.now().isoformat(timespec="seconds")
+    )
 
 
 @dataclass
@@ -63,6 +70,7 @@ class AutoPrintData:
     printer_online: bool = False
     last_job: PrintJobResult | None = None
     job_history: list[PrintJobResult] = field(default_factory=list)
+    total_jobs_sent: int = 0
 
 
 class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
@@ -77,6 +85,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         )
         self._entry = entry
         self._job_history: list[PrintJobResult] = []
+        self._total_jobs_sent: int = 0
 
     # ------------------------------------------------------------------
     # Properties
@@ -115,15 +124,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         return [s.lower() for s in self._entry.options.get(CONF_ALLOWED_SENDERS, [])]
 
     # ------------------------------------------------------------------
-    # IMAP event handler — called by hass.bus.async_listen
+    # IMAP event handler
     # ------------------------------------------------------------------
 
     async def async_handle_imap_event(self, event: Event) -> None:
-        """Process an imap_content event from HA's built-in IMAP integration.
-
-        Filters by allowed senders, retrieves each PDF part via
-        imap.fetch_part, decodes it, and prints to CUPS.
-        """
+        """Process an imap_content event from HA's built-in IMAP integration."""
         sender: str = event.data.get("sender", "").lower()
         allowed = self._allowed_senders
         if allowed and sender not in allowed:
@@ -144,39 +149,16 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 or f"document_{part_key}.pdf"
             )
             result = await self._async_fetch_and_print(
-                entry_id=entry_id, uid=uid, part_key=part_key, filename=filename
+                entry_id=entry_id,
+                uid=uid,
+                part_key=part_key,
+                filename=filename,
+                sender=sender,
             )
             self._record_job(result)
 
         if parts:
             await self.async_request_refresh()
-
-    async def async_process_imap_part(
-        self,
-        entry_id: str,
-        uid: str,
-        part_key: str,
-        filename: str | None = None,
-        duplex_override: str | None = None,
-        booklet_override: bool | None = None,
-    ) -> PrintJobResult:
-        """Fetch one IMAP attachment and print it with optional setting overrides.
-
-        Called by the ``auto_print.process_imap_part`` service so that
-        automations and blueprints can drive printing with per-job settings.
-        """
-        effective_filename = filename or f"attachment_{part_key}.pdf"
-        result = await self._async_fetch_and_print(
-            entry_id=entry_id,
-            uid=uid,
-            part_key=part_key,
-            filename=effective_filename,
-            duplex_override=duplex_override,
-            booklet_override=booklet_override,
-        )
-        self._record_job(result)
-        await self.async_request_refresh()
-        return result
 
     async def _async_fetch_and_print(
         self,
@@ -186,12 +168,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         filename: str,
         duplex_override: str | None = None,
         booklet_override: bool | None = None,
+        sender: str | None = None,
     ) -> PrintJobResult:
-        """Fetch one attachment via imap.fetch_part and print it.
-
-        *duplex_override* and *booklet_override* take precedence over the
-        integration's configured defaults when provided.
-        """
+        """Fetch one attachment via imap.fetch_part and print it."""
         try:
             response: dict[str, Any] = await self.hass.services.async_call(
                 "imap",
@@ -204,7 +183,9 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             logger.error(
                 "imap.fetch_part failed for uid=%s part=%s: %s", uid, part_key, exc
             )
-            return PrintJobResult(filename=filename, success=False, error=str(exc))
+            return PrintJobResult(
+                filename=filename, success=False, error=str(exc), sender=sender
+            )
 
         try:
             raw: str = response["part_data"]
@@ -212,13 +193,14 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             if encoding == "base64":
                 pdf_bytes = base64.b64decode(raw)
             else:
-                # 7bit / 8bit / binary — data is already plain text/bytes
                 pdf_bytes = (
                     raw.encode("latin-1") if isinstance(raw, str) else bytes(raw)
                 )
         except Exception as exc:
             logger.error("Decoding attachment '%s' failed: %s", filename, exc)
-            return PrintJobResult(filename=filename, success=False, error=str(exc))
+            return PrintJobResult(
+                filename=filename, success=False, error=str(exc), sender=sender
+            )
 
         effective_duplex = duplex_override or self._duplex_mode
         effective_booklet = (
@@ -226,13 +208,40 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             if booklet_override is not None
             else is_booklet_job(filename, self._booklet_patterns)
         )
-        return await self.async_send_print_job(
+        result = await self.async_send_print_job(
             filename, pdf_bytes, effective_duplex, effective_booklet
         )
+        result.sender = sender
+        return result
 
     # ------------------------------------------------------------------
     # Public helpers (called from services / button entity)
     # ------------------------------------------------------------------
+
+    async def async_process_imap_part(
+        self,
+        entry_id: str,
+        uid: str,
+        part_key: str,
+        filename: str | None = None,
+        duplex_override: str | None = None,
+        booklet_override: bool | None = None,
+        sender: str | None = None,
+    ) -> PrintJobResult:
+        """Fetch one IMAP attachment and print it (called by the service)."""
+        effective_filename = filename or f"attachment_{part_key}.pdf"
+        result = await self._async_fetch_and_print(
+            entry_id=entry_id,
+            uid=uid,
+            part_key=part_key,
+            filename=effective_filename,
+            duplex_override=duplex_override,
+            booklet_override=booklet_override,
+            sender=sender,
+        )
+        self._record_job(result)
+        await self.async_request_refresh()
+        return result
 
     async def async_print_file(
         self,
@@ -249,11 +258,11 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             with open(file_path, "rb") as f:
                 pdf_data = f.read()
         except OSError as exc:
-            return PrintJobResult(filename=filename, success=False, error=str(exc))
+            result = PrintJobResult(filename=filename, success=False, error=str(exc))
+            self._record_job(result)
+            return result
 
-        result = await self.async_send_print_job(
-            filename, pdf_data, effective_duplex, booklet
-        )
+        result = await self.async_send_print_job(filename, pdf_data, effective_duplex, booklet)
         self._record_job(result)
         await self.async_request_refresh()
         return result
@@ -286,7 +295,10 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 )
             except Exception as exc:
                 logger.error("Booklet conversion failed for '%s': %s", filename, exc)
-                return PrintJobResult(filename=filename, success=False, error=str(exc))
+                return PrintJobResult(
+                    filename=filename, success=False, error=str(exc),
+                    duplex=duplex_mode, booklet=booklet,
+                )
 
         sides = determine_sides(duplex_mode, booklet)
         packet = build_ipp_packet(self._printer_name, filename, sides, pdf_data)
@@ -304,15 +316,24 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                     logger.debug(
                         "Print job accepted for '%s' (sides=%s)", filename, sides
                     )
-                    return PrintJobResult(filename=filename, success=True)
+                    return PrintJobResult(
+                        filename=filename, success=True,
+                        duplex=duplex_mode, booklet=booklet,
+                    )
 
                 error = f"HTTP {resp.status}"
                 logger.error("CUPS rejected job for '%s': %s", filename, error)
-                return PrintJobResult(filename=filename, success=False, error=error)
+                return PrintJobResult(
+                    filename=filename, success=False, error=error,
+                    duplex=duplex_mode, booklet=booklet,
+                )
 
         except aiohttp.ClientError as exc:
             logger.error("Network error printing '%s': %s", filename, exc)
-            return PrintJobResult(filename=filename, success=False, error=str(exc))
+            return PrintJobResult(
+                filename=filename, success=False, error=str(exc),
+                duplex=duplex_mode, booklet=booklet,
+            )
 
     # ------------------------------------------------------------------
     # Coordinator periodic update (printer status only)
@@ -328,6 +349,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             printer_online=printer_online,
             last_job=last_job,
             job_history=list(self._job_history),
+            total_jobs_sent=self._total_jobs_sent,
         )
 
     # ------------------------------------------------------------------
@@ -335,7 +357,6 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
     # ------------------------------------------------------------------
 
     async def _async_check_printer_online(self) -> bool:
-        """Return True if the CUPS server responds to a HEAD request."""
         session = async_get_clientsession(self.hass)
         try:
             async with session.head(
@@ -346,7 +367,6 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             return False
 
     def _count_queue_files(self) -> int:
-        """Count PDF files sitting in the queue folder."""
         try:
             return sum(
                 1
@@ -357,5 +377,22 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             return 0
 
     def _record_job(self, result: PrintJobResult) -> None:
-        """Prepend a result to the job history (capped at 20 entries)."""
-        self._job_history = ([result] + self._job_history)[:20]
+        """Prepend result to history and fire an audit event."""
+        self._job_history = ([result] + self._job_history)[:50]
+        self._total_jobs_sent += 1
+
+        # Fire to HA event bus → appears in Logbook via logbook.py descriptor.
+        self.hass.bus.async_fire(
+            EVENT_JOB_COMPLETED,
+            {
+                "entry_id": self._entry.entry_id,
+                "printer": self._printer_name,
+                "filename": result.filename,
+                "success": result.success,
+                "error": result.error,
+                "sender": result.sender,
+                "duplex": result.duplex,
+                "booklet": result.booklet,
+                "timestamp": result.timestamp,
+            },
+        )

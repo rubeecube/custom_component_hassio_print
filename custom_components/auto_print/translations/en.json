@@ -55,7 +55,8 @@
   "entity": {
     "sensor": {
       "queue_depth": { "name": "Print Queue Depth" },
-      "last_job": { "name": "Last Print Job" }
+      "last_job": { "name": "Last Print Job" },
+      "job_log": { "name": "Job Log" }
     },
     "binary_sensor": {
       "printer_online": { "name": "Printer Online" }

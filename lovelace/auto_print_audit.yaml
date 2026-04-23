@@ -1,0 +1,100 @@
+# Auto Print — Audit Dashboard View
+#
+# How to add this view to your Home Assistant dashboard:
+#
+#   1. Open your dashboard → Edit → Add View → Manual Configuration (YAML)
+#   2. Paste the CONTENTS of this file as the view YAML.
+#   OR
+#   1. In configuration.yaml add the lovelace section and reference this file.
+#
+# Replace PRINTER_NAME with the CUPS queue name used during setup
+# (e.g. Canon_MG3600_series).  Entity IDs follow the pattern:
+#   sensor.auto_print_{slug}_job_log
+#   sensor.auto_print_{slug}_last_print_job
+#   binary_sensor.auto_print_{slug}_printer_online
+#
+# The entity slugs are derived from the printer name — open Developer Tools →
+# States and search "auto_print" to find the exact IDs for your setup.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+title: Print Audit
+path: auto-print-audit
+icon: mdi:printer-eye
+
+cards:
+
+  # ── Status row ─────────────────────────────────────────────────────────────
+  - type: horizontal-stack
+    cards:
+      - type: entity
+        entity: binary_sensor.auto_print_PRINTER_NAME_printer_online
+        name: Printer Online
+        icon: mdi:printer-check
+        state_color: true
+
+      - type: entity
+        entity: sensor.auto_print_PRINTER_NAME_print_queue_depth
+        name: Queue Depth
+        icon: mdi:file-multiple
+
+      - type: entity
+        entity: sensor.auto_print_PRINTER_NAME_job_log
+        name: Jobs Sent
+        icon: mdi:counter
+
+      - type: entity
+        entity: sensor.auto_print_PRINTER_NAME_last_print_job
+        name: Last Job
+        icon: mdi:file-check
+
+  # ── Logbook ────────────────────────────────────────────────────────────────
+  - type: logbook
+    title: Print Event Log
+    hours_to_show: 168    # 7 days
+    entities:
+      - sensor.auto_print_PRINTER_NAME_job_log
+      - sensor.auto_print_PRINTER_NAME_last_print_job
+
+  # ── Recent jobs table (Markdown) ───────────────────────────────────────────
+  - type: markdown
+    title: Recent Print Jobs (last 50)
+    content: |
+      {% set jobs = state_attr('sensor.auto_print_PRINTER_NAME_job_log', 'jobs') %}
+      {% if jobs is none or jobs | count == 0 %}
+      *No print jobs recorded yet.*
+      {% else %}
+      | Time | File | Status | Sender | Duplex | Booklet |
+      |------|------|:------:|--------|--------|:-------:|
+      {% for j in jobs %}
+      | {{ j.timestamp | as_datetime | as_local | strftime('%d/%m %H:%M') }} | `{{ j.filename }}` | {{ '✅' if j.success else '❌' }} | {{ j.sender or '—' }} | {{ j.duplex or '—' }} | {{ '📖' if j.booklet else '—' }} |
+      {% endfor %}
+      {% endif %}
+
+  # ── Statistics graph ───────────────────────────────────────────────────────
+  - type: statistics-graph
+    title: Print Activity
+    entities:
+      - entity: sensor.auto_print_PRINTER_NAME_job_log
+        name: Jobs Sent
+    period:
+      calendar:
+        period: day
+    stat_types:
+      - max
+    days_to_show: 30
+
+  # ── Quick actions ──────────────────────────────────────────────────────────
+  - type: entities
+    title: Actions
+    entities:
+      - entity: button.auto_print_PRINTER_NAME_print_test_page
+        name: Print Test Page
+
+      - type: button
+        name: Clear Print Queue
+        icon: mdi:delete-sweep
+        action_name: Clear
+        tap_action:
+          action: call-service
+          service: auto_print.clear_queue

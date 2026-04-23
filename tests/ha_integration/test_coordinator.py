@@ -91,7 +91,8 @@ async def test_pdf_event_triggers_fetch_and_print(hass: HomeAssistant) -> None:
         await coordinator.async_handle_imap_event(_event(parts=_pdf_parts()))
 
     mock_fetch.assert_called_once_with(
-        entry_id="imap_entry_1", uid="99", part_key="1", filename="document.pdf"
+        entry_id="imap_entry_1", uid="99", part_key="1",
+        filename="document.pdf", sender="sender@example.com",
     )
 
 

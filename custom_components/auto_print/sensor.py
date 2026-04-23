@@ -17,6 +17,7 @@ from .const import (
     ATTR_LAST_STATUS,
     CONF_PRINTER_NAME,
     DOMAIN,
+    SENSOR_JOB_LOG,
     SENSOR_LAST_JOB,
     SENSOR_QUEUE_DEPTH,
 )
@@ -35,6 +36,7 @@ async def async_setup_entry(
         [
             QueueDepthSensor(coordinator, entry),
             LastJobSensor(coordinator, entry),
+            JobLogSensor(coordinator, entry),
         ]
     )
 
@@ -96,4 +98,53 @@ class LastJobSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
         attrs: dict = {ATTR_LAST_FILENAME: job.filename}
         if job.error:
             attrs[ATTR_LAST_STATUS] = job.error
+        if job.sender:
+            attrs["sender"] = job.sender
+        if job.duplex:
+            attrs["duplex"] = job.duplex
+        attrs["booklet"] = job.booklet
+        attrs["timestamp"] = job.timestamp
         return attrs
+
+
+class JobLogSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
+    """Cumulative print job counter with full history in attributes.
+
+    state      : total number of jobs sent since last HA restart
+    attributes : jobs — list of the last 50 print attempts with full metadata
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = SENSOR_JOB_LOG
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = "jobs"
+    _attr_icon = "mdi:clipboard-text-clock"
+
+    def __init__(self, coordinator: AutoPrintCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_{SENSOR_JOB_LOG}"
+        self._attr_device_info = _device_info(entry)
+
+    @property
+    def native_value(self) -> int:
+        return self.coordinator.data.total_jobs_sent if self.coordinator.data else 0
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data: AutoPrintData | None = self.coordinator.data
+        if data is None:
+            return {"jobs": []}
+        return {
+            "jobs": [
+                {
+                    "timestamp": j.timestamp,
+                    "filename": j.filename,
+                    "success": j.success,
+                    "error": j.error,
+                    "sender": j.sender,
+                    "duplex": j.duplex,
+                    "booklet": j.booklet,
+                }
+                for j in data.job_history
+            ]
+        }
