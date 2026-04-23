@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+# ---------------------------------------------------------------------------
+# Project metadata
+# ---------------------------------------------------------------------------
+
+[project]
+name = "auto-print"
+version = "2.0.0"
+description = "Home Assistant custom component — print PDF email attachments via IMAP + IPP/CUPS"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+keywords = ["home-assistant", "hacs", "printing", "imap", "ipp", "cups", "airprint"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Home Automation",
+]
+
+# Runtime dependency (installed by HA from manifest.json requirements[])
+dependencies = [
+    "pypdf>=4.0.0",
+]
+
+[project.urls]
+Homepage      = "https://github.com/rubeecube/custom_component_hassio_print"
+Repository    = "https://github.com/rubeecube/custom_component_hassio_print"
+"Bug Tracker" = "https://github.com/rubeecube/custom_component_hassio_print/issues"
+Changelog     = "https://github.com/rubeecube/custom_component_hassio_print/releases"
+
+# ---------------------------------------------------------------------------
+# Optional: dev / test extras
+# ---------------------------------------------------------------------------
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-homeassistant-custom-component>=0.13",
+    "pypdf>=4.0.0",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+]
+
+# ---------------------------------------------------------------------------
+# Pytest configuration (replaces pytest.ini)
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths    = ["tests"]
+
+# ---------------------------------------------------------------------------
+# Setuptools: only package the custom component, not tests or tooling
+# ---------------------------------------------------------------------------
+
+[tool.setuptools.packages.find]
+where   = ["."]
+include = ["custom_components*"]
