@@ -1,4 +1,10 @@
+# HA integration test harness (provides hass fixture, MockConfigEntry, etc.)
+pytest-homeassistant-custom-component>=0.13
+
+# General test tooling
 pytest>=8.0
+
+# Runtime dependencies required by the component and legacy scripts
 pypdf>=4.0.0
-requests>=2.31
 pyyaml>=6.0
+requests>=2.31

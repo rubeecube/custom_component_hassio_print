@@ -13,6 +13,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
+from typing import TypeAlias
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 
@@ -54,7 +55,7 @@ _PROCESS_IMAP_PART_SCHEMA = vol.Schema(
 )
 
 # Type alias for config entries carrying AutoPrintCoordinator as runtime data.
-type AutoPrintConfigEntry = ConfigEntry[AutoPrintCoordinator]
+AutoPrintConfigEntry: TypeAlias = ConfigEntry[AutoPrintCoordinator]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) -> bool:

@@ -1,34 +1,42 @@
 # Minimal HA configuration for the Auto Print validation stack.
 #
-# After starting the stack with docker compose up -d:
+# After starting the stack with docker compose up -d --build:
 #
 # 1. Open http://localhost:8123 and finish the onboarding wizard.
 #
 # 2. Add the HA IMAP integration (built-in):
 #    Settings → Integrations → Add → IMAP
-#      Server:   localhost       (GreenMail listens on host port 3143)
-#      Port:     3143
-#      SSL:      Off             (GreenMail uses plain IMAP on 3143)
+#      Server:   localhost
+#      Port:     3143            (GreenMail plain IMAP)
+#      SSL:      Off
 #      Username: test@test.example.com
 #      Password: test
-#    In advanced mode, disable IMAP-Push (GreenMail does not support IDLE).
+#    Advanced mode → disable IMAP-Push (GreenMail does not support IDLE).
 #
 # 3. Add the Auto Print integration:
 #    Settings → Integrations → Add → Auto Print
+#    The setup wizard auto-discovers CUPS at localhost:631 and shows the
+#    GreenMail account as an IMAP pre-fill option.
 #      CUPS URL:      http://localhost:631
-#      Printer Name:  TestPrinter
+#      Printer Name:  TestPrinter   (or select from the dropdown)
+#      IMAP Account:  test@test.example.com  (pre-fills Allowed Senders)
 #
-# 4. In Auto Print options, add test@test.example.com to Allowed Senders.
+# 4. Open Auto Print → Configure (options) and verify / update:
+#      Allowed Senders:    test@test.example.com
+#      IMAP Folder Filter: INBOX          (leave empty to accept all folders)
+#      Default Duplex:     Two-sided portrait
 #
-# 5. Run ./validate.sh from the docker/ directory.
+# 5. Generate a HA long-lived token:
+#    http://localhost:8123/profile → Long-Lived Access Tokens → Create Token
+#
+# 6. Run the validation script:
+#    cd docker/
+#    HA_TOKEN=<your-token> ./validate.sh
 
 homeassistant:
   name: Auto Print Validation
   unit_system: metric
   time_zone: Europe/Paris
-
-# Allow loading custom components from /config/custom_components/
-# (no extra config needed — HA discovers them automatically)
 
 logger:
   default: warning
