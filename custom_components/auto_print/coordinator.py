@@ -40,6 +40,7 @@ from .const import (
     DOMAIN,
     EVENT_JOB_COMPLETED,
 )
+from .imap_checker import EmailPreview, preview_mailbox
 from .print_handler import build_ipp_packet, determine_sides, is_booklet_job
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,18 @@ class PrintJobResult:
 
 
 @dataclass
+class FilterPreviewResult:
+    """Outcome of a filter-preview check."""
+
+    checked_at: str
+    imap_account: str               # username@server shown in the UI
+    total_found: int                # total messages inspected
+    matching: int                   # messages matching the sender filter
+    with_pdf: int                   # matching messages that have a PDF attachment
+    emails: list[EmailPreview] = field(default_factory=list)
+
+
+@dataclass
 class AutoPrintData:
     """Snapshot of integration state exposed to entities."""
 
@@ -71,6 +84,7 @@ class AutoPrintData:
     last_job: PrintJobResult | None = None
     job_history: list[PrintJobResult] = field(default_factory=list)
     total_jobs_sent: int = 0
+    filter_preview: FilterPreviewResult | None = None
 
 
 class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
@@ -86,6 +100,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         self._entry = entry
         self._job_history: list[PrintJobResult] = []
         self._total_jobs_sent: int = 0
+        self._filter_preview: FilterPreviewResult | None = None
 
     # ------------------------------------------------------------------
     # Properties
@@ -267,6 +282,70 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         await self.async_request_refresh()
         return result
 
+    async def async_check_filter(
+        self, imap_entry_id: str | None = None
+    ) -> FilterPreviewResult:
+        """Connect to IMAP and list emails matching the current filter settings.
+
+        Uses the credentials from an existing HA IMAP config entry.
+        Raises HomeAssistantError if no suitable IMAP entry is found.
+        """
+        from homeassistant.exceptions import HomeAssistantError
+
+        imap_entries = self.hass.config_entries.async_entries("imap")
+        if not imap_entries:
+            raise HomeAssistantError(
+                "No IMAP integration found. "
+                "Configure the HA IMAP integration (Settings → Integrations → IMAP) first."
+            )
+
+        target = None
+        if imap_entry_id:
+            for e in imap_entries:
+                if e.entry_id == imap_entry_id:
+                    target = e
+                    break
+            if target is None:
+                raise HomeAssistantError(
+                    f"IMAP entry '{imap_entry_id}' not found."
+                )
+        else:
+            target = imap_entries[0]
+
+        data = target.data
+        server: str = data.get("server", "")
+        port: int = int(data.get("port", 993))
+        # HA IMAP integration may store SSL as "ssl" or "use_ssl"
+        use_ssl: bool = bool(data.get("ssl", data.get("use_ssl", True)))
+        username: str = data.get("username", "")
+        password: str = data.get("password", "")
+        folder: str = data.get("folder", "INBOX")
+        allowed = self._allowed_senders
+
+        logger.debug(
+            "Running filter preview for %s@%s folder=%s senders=%s",
+            username, server, folder, allowed or "all",
+        )
+
+        emails = await self.hass.async_add_executor_job(
+            preview_mailbox, server, port, use_ssl, username, password, folder, allowed
+        )
+
+        matching = [e for e in emails if e.matches_filter]
+        with_pdf = [e for e in matching if e.has_pdf]
+
+        result = FilterPreviewResult(
+            checked_at=datetime.now().isoformat(timespec="seconds"),
+            imap_account=f"{username}@{server}",
+            total_found=len(emails),
+            matching=len(matching),
+            with_pdf=len(with_pdf),
+            emails=emails,
+        )
+        self._filter_preview = result
+        await self.async_request_refresh()
+        return result
+
     async def async_clear_queue(self) -> int:
         """Delete all PDFs in the configured queue folder."""
         folder = self._queue_folder
@@ -350,6 +429,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             last_job=last_job,
             job_history=list(self._job_history),
             total_jobs_sent=self._total_jobs_sent,
+            filter_preview=self._filter_preview,
         )
 
     # ------------------------------------------------------------------

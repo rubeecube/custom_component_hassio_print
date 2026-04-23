@@ -12,7 +12,7 @@ import logging
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 
@@ -23,6 +23,7 @@ from .const import (
     FIELD_BOOKLET,
     FIELD_DUPLEX,
     FIELD_FILE_PATH,
+    SERVICE_CHECK_FILTER,
     SERVICE_CLEAR_QUEUE,
     SERVICE_PRINT_FILE,
     SERVICE_PROCESS_IMAP_PART,
@@ -97,6 +98,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) -
             hass.services.async_remove(DOMAIN, SERVICE_PRINT_FILE)
             hass.services.async_remove(DOMAIN, SERVICE_CLEAR_QUEUE)
             hass.services.async_remove(DOMAIN, SERVICE_PROCESS_IMAP_PART)
+            hass.services.async_remove(DOMAIN, SERVICE_CHECK_FILTER)
 
     return unload_ok
 
@@ -151,6 +153,31 @@ def _register_services(hass: HomeAssistant) -> None:
         SERVICE_PROCESS_IMAP_PART,
         _handle_process_imap_part,
         schema=_PROCESS_IMAP_PART_SCHEMA,
+    )
+
+    async def _handle_check_filter(call: ServiceCall) -> dict:
+        """Run a filter preview and return the results as a service response."""
+        coordinator = _get_any_coordinator(hass)
+        result = await coordinator.async_check_filter(
+            imap_entry_id=call.data.get("imap_entry_id"),
+        )
+        return {
+            "checked_at": result.checked_at,
+            "imap_account": result.imap_account,
+            "total_found": result.total_found,
+            "matching_filter": result.matching,
+            "with_pdf": result.with_pdf,
+            "emails": [e.as_dict() for e in result.emails],
+        }
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CHECK_FILTER,
+        _handle_check_filter,
+        schema=vol.Schema(
+            {vol.Optional("imap_entry_id"): cv.string}
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
     )
 
 

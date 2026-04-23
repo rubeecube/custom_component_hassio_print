@@ -11,7 +11,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import BUTTON_TEST_PAGE, DOMAIN
+from .const import BUTTON_CHECK_FILTER, BUTTON_TEST_PAGE, DOMAIN
 from .coordinator import AutoPrintCoordinator
 from .sensor import _device_info
 
@@ -49,7 +49,10 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: AutoPrintCoordinator = entry.runtime_data
-    async_add_entities([TestPageButton(coordinator, entry)])
+    async_add_entities([
+        TestPageButton(coordinator, entry),
+        CheckFilterButton(coordinator, entry),
+    ])
 
 
 class TestPageButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):
@@ -74,3 +77,20 @@ class TestPageButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):
         )
         if not result.success:
             raise HomeAssistantError(f"Test page failed: {result.error}")
+
+
+class CheckFilterButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):
+    """Run a filter preview: connect to IMAP and show matching emails."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = BUTTON_CHECK_FILTER
+    _attr_icon = "mdi:email-search"
+
+    def __init__(self, coordinator: AutoPrintCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_{BUTTON_CHECK_FILTER}"
+        self._attr_device_info = _device_info(entry)
+
+    async def async_press(self) -> None:
+        """Run filter preview and update sensor.auto_print_*_filter_preview."""
+        await self.coordinator.async_check_filter()

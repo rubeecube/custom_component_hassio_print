@@ -38,6 +38,7 @@ DUPLEX_MODES: dict[str, str] = {
 SERVICE_PRINT_FILE = "print_file"
 SERVICE_CLEAR_QUEUE = "clear_queue"
 SERVICE_PROCESS_IMAP_PART = "process_imap_part"
+SERVICE_CHECK_FILTER = "check_filter"
 
 FIELD_FILE_PATH = "file_path"
 FIELD_DUPLEX = "duplex"
@@ -49,8 +50,10 @@ FIELD_BOOKLET = "booklet"
 SENSOR_QUEUE_DEPTH = "queue_depth"
 SENSOR_LAST_JOB = "last_job"
 SENSOR_JOB_LOG = "job_log"
+SENSOR_FILTER_PREVIEW = "filter_preview"
 BINARY_SENSOR_PRINTER_ONLINE = "printer_online"
 BUTTON_TEST_PAGE = "test_page"
+BUTTON_CHECK_FILTER = "check_filter"
 
 # Event fired after each print job — appears in HA Logbook
 EVENT_JOB_COMPLETED = "auto_print_job_completed"

@@ -40,6 +40,22 @@ clear_queue:
   description: >-
     Delete all PDF files currently sitting in the configured print queue folder.
 
+check_filter:
+  name: Check Filter
+  description: >-
+    Connect to the configured IMAP account and list emails that match the current
+    allowed-senders filter.  Results are returned as a service response and also
+    update the sensor.auto_print_*_filter_preview entity.
+  fields:
+    imap_entry_id:
+      name: IMAP Entry ID
+      description: >-
+        Optional. The config entry ID of the IMAP integration to query.
+        Defaults to the first configured IMAP account.
+      required: false
+      selector:
+        text:
+
 process_imap_part:
   name: Process IMAP Email Part
   description: >-

@@ -56,13 +56,15 @@
     "sensor": {
       "queue_depth": { "name": "Print Queue Depth" },
       "last_job": { "name": "Last Print Job" },
-      "job_log": { "name": "Job Log" }
+      "job_log": { "name": "Job Log" },
+      "filter_preview": { "name": "Filter Preview" }
     },
     "binary_sensor": {
       "printer_online": { "name": "Printer Online" }
     },
     "button": {
-      "test_page": { "name": "Print Test Page" }
+      "test_page": { "name": "Print Test Page" },
+      "check_filter": { "name": "Check Filter" }
     }
   }
 }

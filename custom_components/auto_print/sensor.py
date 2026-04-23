@@ -17,6 +17,7 @@ from .const import (
     ATTR_LAST_STATUS,
     CONF_PRINTER_NAME,
     DOMAIN,
+    SENSOR_FILTER_PREVIEW,
     SENSOR_JOB_LOG,
     SENSOR_LAST_JOB,
     SENSOR_QUEUE_DEPTH,
@@ -37,6 +38,7 @@ async def async_setup_entry(
             QueueDepthSensor(coordinator, entry),
             LastJobSensor(coordinator, entry),
             JobLogSensor(coordinator, entry),
+            FilterPreviewSensor(coordinator, entry),
         ]
     )
 
@@ -147,4 +149,45 @@ class JobLogSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
                 }
                 for j in data.job_history
             ]
+        }
+
+
+class FilterPreviewSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
+    """Shows results of the last 'Check Filter' run.
+
+    state      : number of emails that match the filter AND have a PDF
+    attributes : full list of inspected emails with match / pdf status,
+                 plus summary counters and the time the check was run
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = SENSOR_FILTER_PREVIEW
+    _attr_native_unit_of_measurement = "emails"
+    _attr_icon = "mdi:email-search"
+
+    def __init__(self, coordinator: AutoPrintCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_{SENSOR_FILTER_PREVIEW}"
+        self._attr_device_info = _device_info(entry)
+
+    @property
+    def native_value(self) -> int | None:
+        data = self.coordinator.data
+        if data is None or data.filter_preview is None:
+            return None
+        return data.filter_preview.with_pdf
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self.coordinator.data
+        if data is None or data.filter_preview is None:
+            return {"checked_at": None, "emails": []}
+        preview = data.filter_preview
+        return {
+            "checked_at": preview.checked_at,
+            "imap_account": preview.imap_account,
+            "total_found": preview.total_found,
+            "matching_filter": preview.matching,
+            "with_pdf": preview.with_pdf,
+            "emails": [e.as_dict() for e in preview.emails],
         }
