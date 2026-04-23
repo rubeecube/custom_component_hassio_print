@@ -696,7 +696,51 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         )
         self._filter_preview = result
         await self.async_request_refresh()
+        await self._async_notify_filter_preview(result)
         return result
+
+    async def _async_notify_filter_preview(self, result: "FilterPreviewResult") -> None:
+        """Show a persistent notification with the filter-preview results."""
+        try:
+            from homeassistant.components.persistent_notification import async_create as _pn_create
+
+            pdf_emails = [e for e in result.emails if e.has_pdf and e.matches_filter]
+
+            if not pdf_emails:
+                body = (
+                    f"**Account:** {result.imap_account}  \n"
+                    f"**Checked:** {result.checked_at}  \n\n"
+                    f"Found **{result.total_found}** email(s), "
+                    f"**{result.matching}** match the sender filter, "
+                    f"**{result.with_pdf}** have a PDF attachment.\n\n"
+                    "_No printable emails found. Check your sender/folder filter settings._"
+                )
+            else:
+                rows = "\n".join(
+                    f"| `{e.uid}` | {e.subject[:35]} | {e.sender[:25]} | {e.pdf_count} |"
+                    for e in pdf_emails[:20]
+                )
+                more = f"\n_… and {len(pdf_emails) - 20} more_" if len(pdf_emails) > 20 else ""
+                body = (
+                    f"**Account:** {result.imap_account}  \n"
+                    f"**Checked:** {result.checked_at}  \n\n"
+                    f"Found **{result.total_found}** email(s) · "
+                    f"**{result.matching}** match filter · "
+                    f"**{result.with_pdf}** have PDF\n\n"
+                    "| UID | Subject | From | PDFs |\n"
+                    "|-----|---------|------|:----:|\n"
+                    f"{rows}{more}\n\n"
+                    "_To print one, call service `print_bridge.print_email` with the UID above._"
+                )
+
+            _pn_create(
+                self.hass,
+                body,
+                title="Print Bridge — Mailbox Scan Results",
+                notification_id=f"print_bridge_filter_preview_{self._entry.entry_id}",
+            )
+        except Exception:
+            logger.debug("Could not create filter-preview notification", exc_info=True)
 
     async def async_clear_queue(self) -> int:
         """Delete all PDFs in the configured queue folder."""
