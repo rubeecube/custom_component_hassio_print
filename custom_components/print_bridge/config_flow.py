@@ -576,29 +576,35 @@ def _build_user_schema(
     mdns_printers: list[dict[str, str]],
     imap_entries: list[ConfigEntry],
 ) -> vol.Schema:
+    """Build the setup form schema.
+
+    CUPS fields are only included when CUPS was discovered on this host
+    (cups_url is not None).  When CUPS is absent the form focuses on
+    Direct IPP; the description placeholders explain how to add CUPS.
+    """
     schema: dict = {}
 
     # ── Direct IPP — mDNS discovered + manual entry ────────────────────────
-    mdns_urls = [p["url"] for p in mdns_printers]
-    if mdns_urls:
-        direct_options: dict[str, str] = {"": "None — use CUPS below"}
+    if mdns_printers:
+        direct_options: dict[str, str] = {"": "None — configure CUPS below"}
         for p in mdns_printers:
             direct_options[p["url"]] = f"{p['name']}  ({p['url']})"
         schema[vol.Optional(CONF_DIRECT_PRINTER_URL, default="")] = vol.In(direct_options)
     else:
         schema[vol.Optional(CONF_DIRECT_PRINTER_URL, default="")] = str
 
-    # ── CUPS — optional; only needed when not using Direct IPP ────────────
-    schema[vol.Optional(CONF_CUPS_URL, default=cups_url or "")] = str
-
-    if printers:
-        printer_options = {p: p for p in printers}
-        printer_options[_SENTINEL_MANUAL] = "Enter name manually…"
-        schema[vol.Optional(CONF_PRINTER_NAME, default=printers[0])] = vol.In(
-            printer_options
-        )
-    else:
-        schema[vol.Optional(CONF_PRINTER_NAME, default="")] = str
+    # ── CUPS — shown only when CUPS is running on this HA host ────────────
+    # cups_url is None when no CUPS was found during discovery.
+    if cups_url is not None:
+        schema[vol.Optional(CONF_CUPS_URL, default=cups_url)] = str
+        if printers:
+            printer_options = {p: p for p in printers}
+            printer_options[_SENTINEL_MANUAL] = "Enter name manually…"
+            schema[vol.Optional(CONF_PRINTER_NAME, default=printers[0])] = vol.In(
+                printer_options
+            )
+        else:
+            schema[vol.Optional(CONF_PRINTER_NAME, default="")] = str
 
     # ── IMAP pre-fill ──────────────────────────────────────────────────────
     if imap_entries:
@@ -628,19 +634,21 @@ def _build_placeholders(
             "Check the 'Scan again' box to retry discovery."
         )
 
-    if printers:
+    if cups_url is None:
+        # CUPS not found — explain the option without showing config fields
         cups_info = (
-            f"Found {len(printers)} CUPS printer(s) at {cups_url}: "
+            "CUPS was not found on this host. "
+            "Print Bridge works without CUPS via Direct IPP / AirPrint (select a printer above). "
+            "To use CUPS, install the CUPS add-on and then click Scan again. "
+            "See the documentation for details."
+        )
+    elif printers:
+        cups_info = (
+            f"CUPS found at {cups_url} with {len(printers)} printer(s): "
             + ", ".join(printers)
         )
-    elif cups_url:
-        cups_info = f"CUPS is reachable at {cups_url} but has no printer queues yet."
     else:
-        cups_info = (
-            "No CUPS server found on this host. "
-            "Leave CUPS URL empty if using a Direct IPP URL above, "
-            "or enter your CUPS server URL (e.g. http://192.168.1.x:631)."
-        )
+        cups_info = f"CUPS is reachable at {cups_url} but has no printer queues configured yet."
 
     if imap_entries:
         names = ", ".join(e.data.get("username", e.title) for e in imap_entries)

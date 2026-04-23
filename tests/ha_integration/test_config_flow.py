@@ -55,7 +55,12 @@ def _mock_no_discovery():
 
 
 def _mock_discovery(url: str = "http://localhost:631", printers: list = None):
-    """Patch _discover_cups to return *url* and *printers*; no mDNS."""
+    """Patch _discover_cups to return *url* and *printers*; no mDNS.
+
+    Note: use this (not _mock_no_discovery) in tests that submit CUPS
+    fields, because CUPS fields only appear in the schema when cups_url
+    is not None (i.e. when CUPS is discovered).
+    """
     from contextlib import ExitStack
     stack = ExitStack()
     stack.enter_context(patch(
@@ -90,27 +95,61 @@ def _mock_mdns_discovery(printers: list | None = None):
 # Happy path — no discovery (manual entry)
 # ---------------------------------------------------------------------------
 
-async def test_full_flow_no_discovery(
+async def test_full_flow_cups_discovered(
     hass: HomeAssistant,
     mock_cups_ok,
     mock_setup_entry,
 ) -> None:
-    """Flow with no CUPS discovered: manual text fields → entry created."""
-    with _mock_no_discovery():
+    """When CUPS is discovered, CUPS fields appear and the entry is created."""
+    # Use _mock_discovery so cups_url is not None → CUPS fields shown in form.
+    with _mock_discovery("http://10.0.0.1:631", ["TestPrinter"]):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "user"
 
-    with mock_cups_ok if not isinstance(mock_cups_ok, type(None)) else _mock_no_discovery():
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], _USER_INPUT
-        )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], _USER_INPUT
+    )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"]["cups_url"] == "http://10.0.0.1:631"
     assert result["data"]["printer_name"] == "TestPrinter"
     mock_setup_entry.assert_called_once()
+
+
+async def test_no_cups_form_has_no_cups_fields(
+    hass: HomeAssistant,
+    mock_setup_entry,
+) -> None:
+    """When CUPS is NOT found, CUPS fields must NOT appear in the form schema."""
+    with _mock_no_discovery():
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+    assert result["type"] is FlowResultType.FORM
+    # The schema keys are the field names; CUPS fields must be absent.
+    schema_keys = [str(k) for k in result["data_schema"].schema.keys()]
+    assert not any("cups_url" in k for k in schema_keys), (
+        "CUPS URL field must not appear when CUPS is not installed"
+    )
+    assert not any("printer_name" in k for k in schema_keys), (
+        "Printer Name field must not appear when CUPS is not installed"
+    )
+
+
+async def test_no_cups_description_mentions_documentation(
+    hass: HomeAssistant,
+    mock_setup_entry,
+) -> None:
+    """When CUPS is NOT found, the description must explain how to add it."""
+    with _mock_no_discovery():
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+    cups_info = result.get("description_placeholders", {}).get("cups_info", "")
+    assert "CUPS" in cups_info
+    assert "add-on" in cups_info.lower() or "documentation" in cups_info.lower()
 
 
 async def test_entry_title_contains_printer_name(
@@ -118,7 +157,7 @@ async def test_entry_title_contains_printer_name(
     mock_cups_ok,
     mock_setup_entry,
 ) -> None:
-    with _mock_no_discovery():
+    with _mock_discovery("http://10.0.0.1:631", ["TestPrinter"]):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -198,7 +237,8 @@ async def test_imap_account_pre_fills_allowed_senders(
     )
     imap_entry.add_to_hass(hass)
 
-    with _mock_no_discovery():
+    # Use _mock_discovery so CUPS fields appear in schema.
+    with _mock_discovery("http://10.0.0.1:631", ["TestPrinter"]):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -228,7 +268,8 @@ async def test_skip_imap_creates_empty_allowed_senders(
     )
     imap_entry.add_to_hass(hass)
 
-    with _mock_no_discovery():
+    # Use _mock_discovery so CUPS fields appear in schema.
+    with _mock_discovery("http://10.0.0.1:631", ["TestPrinter"]):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -251,7 +292,8 @@ async def test_cups_unreachable_shows_error_then_recovers(
 ) -> None:
     import aiohttp as _aiohttp
 
-    with _mock_no_discovery():
+    # Need CUPS "found" so CUPS fields appear in schema.
+    with _mock_discovery("http://10.0.0.1:631", ["TestPrinter"]):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -283,15 +325,16 @@ async def test_no_printer_specified_shows_error(
     hass: HomeAssistant,
     mock_setup_entry,
 ) -> None:
-    """Submitting with neither direct URL nor CUPS must show an error."""
+    """Submitting with no direct URL (and no CUPS found) must show an error."""
     with _mock_no_discovery():
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
 
+    # No cups_url in input (field not in schema when CUPS not found); direct URL empty too.
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
-        {"cups_url": "", "printer_name": "", "direct_printer_url": ""},
+        {"direct_printer_url": ""},
     )
     assert result["type"] is FlowResultType.FORM
     assert result["errors"].get("base") == "cups_or_direct_required"
@@ -323,10 +366,11 @@ async def test_rescan_rerenders_form(
         )
 
     # Submit with rescan=True — should re-show the form, not create an entry.
+    # No CUPS fields in input when CUPS not found (not in schema).
     with _mock_no_discovery():
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {"cups_url": "", "printer_name": "", "direct_printer_url": "", "rescan": True},
+            {"direct_printer_url": "", "rescan": True},
         )
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "user"
@@ -341,7 +385,8 @@ async def test_duplicate_entry_aborted(
     mock_cups_ok,
     mock_setup_entry,
 ) -> None:
-    with _mock_no_discovery():
+    # Must use _mock_discovery so CUPS fields are present in schema.
+    with _mock_discovery("http://10.0.0.1:631", ["TestPrinter"]):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -350,7 +395,7 @@ async def test_duplicate_entry_aborted(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
 
-    with _mock_no_discovery():
+    with _mock_discovery("http://10.0.0.1:631", ["TestPrinter"]):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": SOURCE_USER}
         )
@@ -474,19 +519,15 @@ async def test_direct_ipp_flow_creates_entry(
             DOMAIN, context={"source": SOURCE_USER}
         )
 
-    # Supply a direct IPP URL — CUPS fields are ignored.
-    direct_url = "http://10.0.0.23/ipp/print"
+    # Supply a direct IPP URL — no CUPS fields in schema when CUPS not found.
+    direct_url = "http://192.168.1.100/ipp/print"
     with patch(
         "custom_components.print_bridge.config_flow.async_get_clientsession",
         return_value=_make_cups_session(200),
     ):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {
-                "direct_printer_url": direct_url,
-                "cups_url": "http://10.0.0.1:631",
-                "printer_name": "TestPrinter",
-            },
+            {"direct_printer_url": direct_url},
         )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -494,4 +535,4 @@ async def test_direct_ipp_flow_creates_entry(
     # CUPS fields must NOT be stored when direct mode is used.
     assert "printer_name" not in result["data"]
     assert "cups_url" not in result["data"]
-    assert "Direct" in result["title"] or "10.0.0.23" in result["title"]
+    assert "direct" in result["title"].lower() or "192.168.1.100" in result["title"]

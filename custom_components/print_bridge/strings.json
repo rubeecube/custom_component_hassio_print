@@ -5,18 +5,18 @@
         "title": "Printer Setup",
         "description": "{direct_info}\n\n{cups_info}\n\n{imap_info}",
         "data": {
-          "direct_printer_url": "Direct IPP Printer URL (AirPrint / no CUPS)",
-          "cups_url": "CUPS Base URL (optional)",
-          "printer_name": "Printer Queue Name (optional)",
+          "direct_printer_url": "Printer (Direct IPP / AirPrint)",
+          "cups_url": "CUPS Server URL",
+          "printer_name": "Printer Queue",
           "imap_account": "Pre-fill Allowed Senders from IMAP Account",
           "rescan": "Scan for printers again"
         },
         "data_description": {
-          "direct_printer_url": "Select a printer discovered via mDNS, or type its IPP URL (e.g. http://192.168.1.x/ipp/print). Leave empty to use CUPS below.",
-          "cups_url": "Only needed when NOT using a Direct IPP URL. Enter your CUPS server URL (e.g. http://192.168.1.x:631). Leave empty for Direct IPP mode.",
-          "printer_name": "Only needed for CUPS mode. Select a discovered queue or type it manually. Leave empty for Direct IPP mode.",
+          "direct_printer_url": "Select a printer discovered on your network, or type its IPP URL (e.g. http://192.168.1.x/ipp/print). No CUPS required — works with any AirPrint printer.",
+          "cups_url": "URL of your CUPS server (e.g. http://192.168.1.x:631). Shown because CUPS was detected on this host.",
+          "printer_name": "CUPS printer queue name as registered in CUPS.",
           "imap_account": "Select an IMAP account to automatically add its address to Allowed Senders. You can change this later in Options.",
-          "rescan": "Check this box and click Submit to re-scan your network for printers."
+          "rescan": "Check this box and click Submit to re-scan your network for printers. Install the CUPS add-on first if you want to use CUPS."
         }
       },
       "manual_printer": {
