@@ -1,14 +1,33 @@
 # Print Bridge
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/rubeecube/ha-print-bridge/main/hacs.png" alt="Print Bridge logo" width="480"/>
+</p>
+
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.4%2B-blue.svg)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-85%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-99%20passing-brightgreen.svg)](tests/)
+[![Version](https://img.shields.io/badge/version-0.1.2-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository?owner=rubeecube&repository=ha-print-bridge&category=integration)
 [![Add Print Bridge to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=print_bridge)
 
 Print PDF email attachments directly to a network printer — fully inside Home Assistant.
+
+### Supported platforms
+
+| Platform | Supported | Notes |
+|---|:---:|---|
+| **Home Assistant OS** | ✅ | Recommended — full mDNS discovery, all features |
+| **Home Assistant Supervised** | ✅ | Full support on any Linux host |
+| **Home Assistant Container** (`--network=host`) | ✅ | Host networking required for mDNS |
+| **Home Assistant Core** (Linux) | ✅ | mDNS works if the host has Avahi/Bonjour |
+| **Docker (bridge network)** | ⚠️ | mDNS discovery limited — type IPP URL manually |
+
+> mDNS printer discovery runs on the HA host and requires multicast packets to reach the HA process.
+> Docker bridge networking blocks multicast, so auto-discovery will not find LAN printers.
+> You can still configure a printer manually by typing its IPP URL.
 
 **Print Bridge** bridges HA's built-in IMAP integration with a CUPS print server.
 When an email with a PDF attachment arrives from a matching sender (and folder),
@@ -215,6 +234,32 @@ Used internally by the blueprint; callable from any automation or script.
 | `filename` | no | Display name for the print job |
 | `duplex` | no | Override duplex for this job |
 | `booklet` | no | Force booklet page reordering |
+
+### `print_bridge.print_email`
+
+Print all PDF attachments from a specific email in your mailbox — on demand, without waiting for the email to arrive again. Get the UID from the Lovelace email table or the `filter_preview` sensor.
+
+| Field | Required | Description |
+|---|---|---|
+| `uid` | yes | IMAP UID of the email (shown in the Lovelace email table) |
+| `imap_entry_id` | no | IMAP config entry ID — defaults to the first configured account |
+| `duplex` | no | Override duplex for this job |
+| `booklet` | no | Force booklet page reordering |
+
+**From Developer Tools → Services:**
+```yaml
+service: print_bridge.print_email
+data:
+  uid: "42"
+  duplex: two-sided-long-edge
+```
+
+**From an automation, after `check_filter`:**
+```yaml
+action: print_bridge.print_email
+data:
+  uid: "{{ state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'emails')[0].uid }}"
+```
 
 ### `print_bridge.check_filter`
 

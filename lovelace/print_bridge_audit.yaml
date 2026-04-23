@@ -99,7 +99,7 @@ cards:
     icon: mdi:email-search
 
   - type: markdown
-    title: Filter Preview — Matching Emails
+    title: Mailbox — Matching Emails
     content: |
       {% set preview = state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'emails') %}
       {% set checked = state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'checked_at') %}
@@ -108,13 +108,16 @@ cards:
       {% else %}
       **Last checked:** {{ checked }}  ·  **Account:** {{ state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'imap_account') }}
 
-      **{{ state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'total_found') }}** emails scanned  ·  **{{ state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'matching_filter') }}** match filter  ·  **{{ state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'with_pdf') }}** have a PDF
+      **{{ state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'total_found') }}** emails scanned  ·  **{{ state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'matching_filter') }}** match filter  ·  **{{ state_attr('sensor.print_bridge_PRINTER_NAME_filter_preview', 'with_pdf') }}** have PDF
 
-      | Date | Subject | From | Folder | Match | PDF |
-      |------|---------|------|--------|:-----:|:---:|
+      | UID | Date | Subject | From | PDF | Print |
+      |-----|------|---------|------|:---:|-------|
       {% for e in preview %}
-      | {{ e.date | truncate(16, true, '') }} | {{ e.subject | truncate(35) }} | {{ e.sender | truncate(25) }} | {{ e.folder }} | {{ '✅' if e.matches_filter else '⬜' }} | {{ '📄 ×' ~ e.pdf_count if e.has_pdf else '—' }} |
+      | `{{ e.uid }}` | {{ e.date | truncate(14, true, '') }} | {{ e.subject | truncate(30) }} | {{ e.sender | truncate(22) }} | {{ '📄×' ~ e.pdf_count if e.has_pdf else '—' }} | {% if e.has_pdf %}`print_email(uid={{ e.uid }})`{% else %}—{% endif %} |
       {% endfor %}
+
+      **To print an email:** call service `print_bridge.print_email` with the UID shown above.
+      In Developer Tools → Services, or trigger via an automation.
       {% endif %}
 
   # ── Quick actions ──────────────────────────────────────────────────────────

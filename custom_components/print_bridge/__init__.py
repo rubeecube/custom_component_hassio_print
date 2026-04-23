@@ -26,6 +26,7 @@ from .const import (
     FIELD_FILE_PATH,
     SERVICE_CHECK_FILTER,
     SERVICE_CLEAR_QUEUE,
+    SERVICE_PRINT_EMAIL,
     SERVICE_PRINT_FILE,
     SERVICE_PROCESS_IMAP_PART,
     SERVICE_RETRY_JOB,
@@ -99,7 +100,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) -
         if not remaining:
             for svc in (
                 SERVICE_PRINT_FILE, SERVICE_CLEAR_QUEUE,
-                SERVICE_PROCESS_IMAP_PART, SERVICE_CHECK_FILTER, SERVICE_RETRY_JOB,
+                SERVICE_PROCESS_IMAP_PART, SERVICE_CHECK_FILTER,
+                SERVICE_RETRY_JOB, SERVICE_PRINT_EMAIL,
             ):
                 hass.services.async_remove(DOMAIN, svc)
 
@@ -237,6 +239,97 @@ def _register_services(hass: HomeAssistant) -> None:
                 vol.Optional("uid"): cv.string,
                 vol.Optional("duplex"): vol.In(DUPLEX_MODES),
                 vol.Optional("booklet"): cv.boolean,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    async def _handle_print_email(call: ServiceCall) -> dict:
+        """Print all PDF attachments of a specific email from the IMAP server.
+
+        This lets users trigger a print job for any email in their mailbox —
+        ideal for on-demand printing from the Lovelace dashboard or automations.
+        """
+        uid: str = call.data["uid"]
+        imap_entry_id: str | None = call.data.get("imap_entry_id")
+        duplex: str | None = call.data.get("duplex")
+        booklet: bool = call.data.get("booklet", False)
+
+        # Default to the first configured IMAP entry.
+        if not imap_entry_id:
+            imap_entries = hass.config_entries.async_entries("imap")
+            if not imap_entries:
+                raise HomeAssistantError(
+                    "No IMAP integration configured. "
+                    "Add the HA IMAP integration first."
+                )
+            imap_entry_id = imap_entries[0].entry_id
+
+        coordinator = _get_any_coordinator(hass)
+
+        # Fetch parts metadata to discover which parts are PDFs.
+        try:
+            fetch_result: dict = await hass.services.async_call(
+                "imap",
+                "fetch",
+                {"entry_id": imap_entry_id, "uid": uid},
+                blocking=True,
+                return_response=True,
+            )
+        except Exception as exc:
+            raise HomeAssistantError(
+                f"Failed to fetch email uid={uid}: {exc}"
+            ) from exc
+
+        parts: dict = fetch_result.get("parts", {})
+        pdf_parts = {
+            k: v for k, v in parts.items()
+            if v.get("content_type") == "application/pdf"
+        }
+
+        if not pdf_parts:
+            raise HomeAssistantError(
+                f"No PDF attachments found in email uid={uid}. "
+                f"Available parts: {list(parts.keys())}"
+            )
+
+        results = []
+        for part_key, part_info in pdf_parts.items():
+            filename = (
+                part_info.get("filename")
+                or part_info.get("file_name")
+                or f"attachment_{part_key}.pdf"
+            )
+            result = await coordinator.async_process_imap_part(
+                entry_id=imap_entry_id,
+                uid=uid,
+                part_key=part_key,
+                filename=filename,
+                duplex_override=duplex,
+                booklet_override=booklet or None,
+            )
+            results.append({
+                "filename": result.filename,
+                "success": result.success,
+                "error": result.error,
+            })
+
+        return {
+            "uid": uid,
+            "printed": len(results),
+            "results": results,
+        }
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_PRINT_EMAIL,
+        _handle_print_email,
+        schema=vol.Schema(
+            {
+                vol.Required("uid"): cv.string,
+                vol.Optional("imap_entry_id"): cv.string,
+                vol.Optional("duplex"): vol.In(DUPLEX_MODES),
+                vol.Optional("booklet", default=False): cv.boolean,
             }
         ),
         supports_response=SupportsResponse.OPTIONAL,

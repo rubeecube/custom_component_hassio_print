@@ -1,3 +1,48 @@
+print_email:
+  name: Print Email
+  description: >-
+    Print all PDF attachments from a specific email in your mailbox.
+    Use the email's UID shown in the Filter Preview sensor or in the audit
+    Lovelace view.  Perfect for on-demand printing from the dashboard.
+  fields:
+    uid:
+      name: Email UID
+      description: >-
+        The IMAP UID of the email to print.  Find it in the
+        sensor.print_bridge_*_filter_preview attributes (jobs[].uid) or in
+        the Lovelace audit table.
+      required: true
+      selector:
+        text:
+    imap_entry_id:
+      name: IMAP Entry ID
+      description: >-
+        The config entry ID of the IMAP integration that holds the email.
+        Defaults to the first configured IMAP account.
+      required: false
+      selector:
+        text:
+    duplex:
+      name: Duplex Mode
+      description: Override the default duplex mode for this job.
+      required: false
+      selector:
+        select:
+          options:
+            - label: "One-sided"
+              value: "one-sided"
+            - label: "Two-sided — portrait (long edge)"
+              value: "two-sided-long-edge"
+            - label: "Two-sided — landscape (short edge)"
+              value: "two-sided-short-edge"
+    booklet:
+      name: Booklet Mode
+      description: Reorder pages for saddle-stitch booklet printing.
+      required: false
+      default: false
+      selector:
+        boolean:
+
 print_file:
   name: Print File
   description: >-
