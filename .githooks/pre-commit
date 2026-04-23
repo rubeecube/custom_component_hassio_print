@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# pre-commit — block commits authored by forbidden identities
+#
+# Forbidden patterns (matched against git config user.email):
+BLOCKED_EMAILS=(
+    ""
+)
+
+current_email=$(git config user.email 2>/dev/null)
+
+for blocked in "${BLOCKED_EMAILS[@]}"; do
+    if [[ "$current_email" == "$blocked" ]]; then
+        echo ""
+        echo "  ✖ Commit blocked: the configured author email is forbidden."
+        echo "    Current : $current_email"
+        echo "    Blocked : $blocked"
+        echo ""
+        echo "  Fix with (repo-level):"
+        echo "    git config user.name  'rubeecube'"
+        echo "    git config user.email 'rubeecube@users.noreply.github.com'"
+        echo ""
+        exit 1
+    fi
+done
+
+exit 0

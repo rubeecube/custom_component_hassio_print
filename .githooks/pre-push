@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# pre-push — block pushes that contain commits from forbidden authors
+#
+# Reads the list of commits being pushed (from stdin, as per git docs) and
+# checks each commit's author email.  Aborts if any blocked identity is found.
+#
+# Forbidden author email patterns:
+BLOCKED_PATTERN="\.com"
+
+ZERO="0000000000000000000000000000000000000000"
+found_blocked=0
+
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+    # Deletions have a zero local SHA — nothing to check.
+    [[ "$local_sha" == "$ZERO" ]] && continue
+
+    if [[ "$remote_sha" == "$ZERO" ]]; then
+        # New branch being pushed — check all commits reachable from local_sha.
+        range="$local_sha"
+    else
+        # Existing branch — only check the new commits.
+        range="${remote_sha}..${local_sha}"
+    fi
+
+    bad=$(git log --format="%H %ae %an" "$range" 2>/dev/null \
+          | grep -E "\s${BLOCKED_PATTERN}(\s|$)")
+
+    if [[ -n "$bad" ]]; then
+        echo ""
+        echo "  ✖ Push blocked: commits from a forbidden author were found."
+        echo ""
+        echo "$bad" | while IFS=' ' read -r sha email name rest; do
+            echo "    Commit : $sha"
+            echo "    Author : $name <$email>"
+            echo ""
+        done
+        echo "  Rewrite with:"
+        echo "    FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --env-filter \\"
+        echo "      'export GIT_AUTHOR_NAME=\"rubeecube\";"
+        echo "       export GIT_AUTHOR_EMAIL=\"rubeecube@users.noreply.github.com\";"
+        echo "       export GIT_COMMITTER_NAME=\"rubeecube\";"
+        echo "       export GIT_COMMITTER_EMAIL=\"rubeecube@users.noreply.github.com\"' \\"
+        echo "      -- --branches"
+        echo ""
+        found_blocked=1
+    fi
+done
+
+exit "$found_blocked"
