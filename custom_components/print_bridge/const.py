@@ -11,9 +11,9 @@ CONF_PRINTER_NAME = "printer_name"
 # Optional: direct IPP URL (bypasses CUPS entirely).
 # When set, the component sends Print-Job straight to the printer.
 # Examples:
-#   http://10.0.0.23/ipp/print         (AirPrint, port 80)
-#   http://10.0.0.23:631/ipp/print     (CUPS-port on printer)
-#   ipp://10.0.0.23/ipp/print          (native IPP scheme)
+#   http://192.168.1.x/ipp/print         (AirPrint, port 80)
+#   http://192.168.1.x:631/ipp/print     (CUPS-port on printer)
+#   ipp://192.168.1.x/ipp/print          (native IPP scheme)
 CONF_DIRECT_PRINTER_URL = "direct_printer_url"
 
 # ---------------------------------------------------------------------------
@@ -36,7 +36,7 @@ CONF_SCHEDULE_END = "schedule_end"                 # "HH:MM" — end of allowed 
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
-DEFAULT_CUPS_URL = "http://10.0.0.23:631"
+DEFAULT_CUPS_URL = ""  # filled from discovery; user types if not found
 DEFAULT_DUPLEX_MODE = "two-sided-long-edge"
 DEFAULT_AUTO_DELETE = True
 DEFAULT_QUEUE_FOLDER = "/media/print_queue"

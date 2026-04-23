@@ -1,24 +1,26 @@
 """Config flow and options flow for the Print Bridge integration.
 
-On first launch the flow auto-discovers CUPS at common addresses and reads any
-IMAP integration entries already configured in HA, so that the user can confirm
-or override pre-populated values rather than typing everything from scratch.
+Discovery runs server-side on the HA host using mDNS/Zeroconf, so it finds
+LAN printers that broadcast via Bonjour/AirPrint (_ipp._tcp, _ipps._tcp).
+CUPS on the HA host is also probed.  All fields are optional — the user can
+supply either a Direct IPP URL or a CUPS URL + queue name.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-import re
+import re as _re
+import socket
+import urllib.parse
 from typing import Any
 
 import aiohttp
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-
-import re as _re
 
 from .const import (
     CONF_ALLOWED_SENDERS,
@@ -62,11 +64,21 @@ logger = logging.getLogger(__name__)
 _SENTINEL_MANUAL = "__manual__"    # user wants to type the printer name
 _SENTINEL_SKIP_IMAP = "__skip__"  # user skips IMAP pre-fill
 
-# CUPS addresses probed during auto-discovery
+# CUPS addresses probed during auto-discovery (HA host only)
 _CUPS_PROBE_URLS = [
     "http://localhost:631",
     "http://homeassistant.local:631",
 ]
+
+# mDNS service types for IPP/AirPrint printers
+_IPP_SERVICE_TYPES = [
+    "_ipp._tcp.local.",
+    "_ipps._tcp.local.",
+    "_printer._tcp.local.",
+]
+
+# How long to wait for mDNS responses (seconds)
+_MDNS_TIMEOUT = 4
 
 
 # ---------------------------------------------------------------------------
@@ -94,9 +106,8 @@ async def _probe_cups(
             if resp.status != 200:
                 return False, []
             html = await resp.text(errors="replace")
-            # CUPS renders printer links as: href="/printers/<queue-name>"
             names = list(dict.fromkeys(
-                re.findall(r'href=["\']\/printers\/([^"\'/?#\s]+)', html)
+                _re.findall(r'href=["\']\/printers\/([^"\'/?#\s]+)', html)
             ))
             return True, names
     except (aiohttp.ClientError, OSError):
@@ -106,7 +117,7 @@ async def _probe_cups(
 async def _discover_cups(
     session: aiohttp.ClientSession,
 ) -> tuple[str | None, list[str]]:
-    """Probe known CUPS locations. Return (url, printer_names) for the first hit."""
+    """Probe known localhost CUPS locations. Return (url, printer_names) for the first hit."""
     for url in _CUPS_PROBE_URLS:
         reachable, printers = await _probe_cups(session, url)
         if reachable:
@@ -114,28 +125,72 @@ async def _discover_cups(
     return None, []
 
 
-async def _discover_direct_ipp(
-    session: aiohttp.ClientSession,
-) -> list[str]:
-    """Probe common direct-IPP endpoints and return reachable URLs.
+async def _discover_printers_mdns(hass: HomeAssistant) -> list[dict[str, str]]:
+    """Discover IPP/AirPrint printers via mDNS from the HA host.
 
-    AirPrint printers expose an IPP endpoint at one of these paths.
-    We try localhost addresses; for LAN printers the user must type the URL.
+    Browses _ipp._tcp.local., _ipps._tcp.local., _printer._tcp.local.
+    using HA's Zeroconf instance — runs entirely server-side, not in the
+    user's browser.  Waits up to _MDNS_TIMEOUT seconds for responses.
+
+    Returns list of {name, url} dicts.  IP/port/path are parsed from the
+    service records — no hardcoded addresses.
     """
-    candidates = [
-        "http://localhost:631/ipp/print",
-        "http://localhost:80/ipp/print",
-        "http://localhost/ipp/print",
-    ]
-    found: list[str] = []
-    for url in candidates:
-        try:
-            async with session.head(url, timeout=aiohttp.ClientTimeout(total=2)) as resp:
-                if resp.status < 500:
-                    found.append(url)
-        except Exception:
-            pass
-    return found
+    found: dict[str, dict[str, str]] = {}  # url → info (deduplicate by URL)
+
+    try:
+        from homeassistant.components.zeroconf import async_get_async_instance
+        from zeroconf import ServiceInfo
+        from zeroconf.asyncio import AsyncServiceBrowser
+
+        aiozc = await async_get_async_instance(hass)
+        zc = aiozc.zeroconf
+
+        class _Listener:
+            """Collect discovered IPP service names."""
+            def __init__(self) -> None:
+                self.names: list[tuple[str, str]] = []  # (type_, name)
+
+            def add_service(self, zc_inst, type_: str, name: str) -> None:
+                self.names.append((type_, name))
+
+            def remove_service(self, *_: Any) -> None:
+                pass
+
+            def update_service(self, *_: Any) -> None:
+                pass
+
+        listener = _Listener()
+        browsers = [
+            AsyncServiceBrowser(zc, stype, listener)
+            for stype in _IPP_SERVICE_TYPES
+        ]
+        await asyncio.sleep(_MDNS_TIMEOUT)
+        for browser in browsers:
+            await browser.async_cancel()
+
+        # Resolve each discovered service to a URL.
+        for type_, name in listener.names:
+            info: ServiceInfo | None = zc.get_service_info(type_, name, timeout=1500)
+            if not info or not info.addresses:
+                continue
+            try:
+                host = socket.inet_ntoa(info.addresses[0])
+            except Exception:
+                continue
+            port: int = info.port or 631
+            # 'rp' TXT record is the IPP path (e.g. "ipp/print", "printers/MyPrinter")
+            rp_raw = info.properties.get(b"rp", b"ipp/print")
+            rp = rp_raw.decode("utf-8", errors="replace") if isinstance(rp_raw, bytes) else "ipp/print"
+            scheme = "https" if "ipps" in type_ else "http"
+            url = f"{scheme}://{host}:{port}/{rp.lstrip('/')}"
+            display_name = name.rstrip(".").replace(f".{type_.rstrip('.')}", "").split(".")[0]
+            if url not in found:
+                found[url] = {"name": display_name, "url": url}
+
+    except Exception:
+        logger.debug("mDNS printer discovery failed", exc_info=True)
+
+    return list(found.values())
 
 
 def _imap_choices(entries: list[ConfigEntry]) -> dict[str, str]:
@@ -166,14 +221,16 @@ def _email_from_imap_entry(
 # ---------------------------------------------------------------------------
 
 class AutoPrintConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Setup wizard with auto-discovery for CUPS and IMAP pre-fill."""
+    """Setup wizard with mDNS + CUPS auto-discovery and optional IMAP pre-fill."""
 
     VERSION = 1
 
     def __init__(self) -> None:
+        # CUPS discovery (localhost only)
         self._discovered_cups_url: str | None = None
         self._discovered_printers: list[str] = []
-        self._discovered_direct_urls: list[str] = []
+        # mDNS-discovered direct IPP printers (LAN)
+        self._discovered_mdns: list[dict[str, str]] = []
         self._imap_entries: list[ConfigEntry] = []
         self._discovery_done: bool = False
         self._pending_cups_url: str = ""
@@ -186,28 +243,52 @@ class AutoPrintConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Show CUPS + optional IMAP pre-fill form, pre-populated from discovery."""
+        """Show setup form, pre-populated from mDNS + CUPS discovery."""
         errors: dict[str, str] = {}
 
-        # Auto-discover once on first render (user_input is None).
-        if not self._discovery_done:
+        # Run discovery on first render OR when the user asks to rescan.
+        rescan_requested = (
+            user_input is not None and user_input.pop("rescan", False)
+        )
+        if not self._discovery_done or rescan_requested:
             session = async_get_clientsession(self.hass)
-            self._discovered_cups_url, self._discovered_printers = (
-                await _discover_cups(session)
-            )
-            self._discovered_direct_urls = await _discover_direct_ipp(session)
+            # Run CUPS probe and mDNS scan concurrently.
+            cups_task = asyncio.create_task(_discover_cups(session))
+            mdns_task = asyncio.create_task(_discover_printers_mdns(self.hass))
+            (
+                (self._discovered_cups_url, self._discovered_printers),
+                self._discovered_mdns,
+            ) = await asyncio.gather(cups_task, mdns_task)
             self._imap_entries = list(self.hass.config_entries.async_entries("imap"))
             self._discovery_done = True
 
+            if rescan_requested:
+                # Re-render the form with fresh results; don't validate.
+                return self.async_show_form(
+                    step_id="user",
+                    data_schema=_build_user_schema(
+                        self._discovered_cups_url,
+                        self._discovered_printers,
+                        self._discovered_mdns,
+                        self._imap_entries,
+                    ),
+                    errors={},
+                    description_placeholders=_build_placeholders(
+                        self._discovered_cups_url,
+                        self._discovered_printers,
+                        self._discovered_mdns,
+                        self._imap_entries,
+                    ),
+                )
+
         if user_input is not None:
-            cups_url = user_input[CONF_CUPS_URL].rstrip("/")
-            printer_raw: str = user_input[CONF_PRINTER_NAME]
-            direct_url: str = user_input.get(CONF_DIRECT_PRINTER_URL, "").strip()
+            cups_url = (user_input.get(CONF_CUPS_URL) or "").strip().rstrip("/")
+            printer_raw: str = (user_input.get(CONF_PRINTER_NAME) or "").strip()
+            direct_url: str = (user_input.get(CONF_DIRECT_PRINTER_URL) or "").strip()
             imap_sel: str = user_input.get("imap_account", _SENTINEL_SKIP_IMAP)
 
             # Direct IPP URL takes precedence over CUPS setup.
             if direct_url:
-                # Normalise ipp:// → http:// for reachability check.
                 check_url = direct_url
                 if check_url.startswith("ipp://"):
                     check_url = "http://" + check_url[len("ipp://"):]
@@ -226,38 +307,38 @@ class AutoPrintConfigFlow(ConfigFlow, domain=DOMAIN):
                     errors[CONF_DIRECT_PRINTER_URL] = "unknown"
 
                 if not errors:
-                    # Derive a display name from the URL host
-                    import urllib.parse
                     parsed = urllib.parse.urlparse(direct_url)
                     display = parsed.hostname or direct_url
                     return await self._create_direct(direct_url, display, imap_sel)
 
-            else:
-                # User chose to type the printer name → go to sub-step.
+            elif cups_url and printer_raw:
+                # CUPS mode: user provided both URL and printer name.
                 if printer_raw == _SENTINEL_MANUAL:
                     self._pending_cups_url = cups_url
-                    self._pending_imap_sel = imap_sel  # carry IMAP selection to sub-step
+                    self._pending_imap_sel = imap_sel
                     return await self.async_step_manual_printer()
 
-                printer_name = printer_raw.strip()
                 await self._validate_cups(cups_url, errors)
-
                 if not errors:
-                    return await self._create(cups_url, printer_name, imap_sel)
+                    return await self._create(cups_url, printer_raw, imap_sel)
+
+            else:
+                # Neither direct URL nor CUPS+name provided.
+                errors["base"] = "cups_or_direct_required"
 
         return self.async_show_form(
             step_id="user",
             data_schema=_build_user_schema(
                 self._discovered_cups_url,
                 self._discovered_printers,
-                self._discovered_direct_urls,
+                self._discovered_mdns,
                 self._imap_entries,
             ),
             errors=errors,
             description_placeholders=_build_placeholders(
                 self._discovered_cups_url,
                 self._discovered_printers,
-                self._discovered_direct_urls,
+                self._discovered_mdns,
                 self._imap_entries,
             ),
         )
@@ -295,6 +376,9 @@ class AutoPrintConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def _validate_cups(self, cups_url: str, errors: dict[str, str]) -> None:
         """HEAD-check the CUPS URL and populate *errors* on failure."""
+        if not cups_url:
+            errors["base"] = "cups_or_direct_required"
+            return
         try:
             session = async_get_clientsession(self.hass)
             async with session.head(
@@ -367,7 +451,6 @@ class AutoPrintOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            # Optional: append the username from a selected IMAP entry.
             imap_sel = user_input.pop("imap_account", _SENTINEL_SKIP_IMAP)
             raw_senders: str = user_input[CONF_ALLOWED_SENDERS]
             extra = _email_from_imap_entry(imap_sel, imap_entries)
@@ -390,16 +473,12 @@ class AutoPrintOptionsFlow(OptionsFlow):
                 if f.strip()
             ]
 
-            # Validate HH:MM schedule fields.
             for time_key in (CONF_SCHEDULE_START, CONF_SCHEDULE_END):
                 val = user_input.get(time_key, "")
                 if val and not _HHMM_PATTERN.match(val):
                     errors[time_key] = "invalid_time_format"
 
-            if errors:
-                # Re-show form with errors.
-                pass
-            else:
+            if not errors:
                 return self.async_create_entry(
                     title="",
                     data={
@@ -414,7 +493,6 @@ class AutoPrintOptionsFlow(OptionsFlow):
         current_senders = options.get(CONF_ALLOWED_SENDERS, [])
         current_folders = options.get(CONF_FOLDER_FILTER, [])
 
-        # Build a hint about which folders the configured IMAP entries monitor.
         imap_folder_hint = ", ".join(
             f"{e.data.get('folder', 'INBOX')} ({e.data.get('username', e.title)})"
             for e in imap_entries
@@ -427,6 +505,14 @@ class AutoPrintOptionsFlow(OptionsFlow):
             vol.Required(
                 CONF_FOLDER_FILTER, default="\n".join(current_folders)
             ): str,
+        }
+
+        if imap_entries:
+            schema_dict[
+                vol.Optional("imap_account", default=_SENTINEL_SKIP_IMAP)
+            ] = vol.In(_imap_choices(imap_entries))
+
+        schema_dict.update({
             vol.Required(
                 CONF_DUPLEX_MODE,
                 default=options.get(CONF_DUPLEX_MODE, DEFAULT_DUPLEX_MODE),
@@ -442,61 +528,35 @@ class AutoPrintOptionsFlow(OptionsFlow):
                 CONF_QUEUE_FOLDER,
                 default=options.get(CONF_QUEUE_FOLDER, DEFAULT_QUEUE_FOLDER),
             ): str,
-        }
-
-        # Only show the IMAP shortcut if accounts are configured.
-        if imap_entries:
-            schema_dict[
-                vol.Optional("imap_account", default=_SENTINEL_SKIP_IMAP)
-            ] = vol.In(_imap_choices(imap_entries))
-
-        # ── Email post-processing ──────────────────────────────────────────
-        schema_dict[
             vol.Required(
                 CONF_EMAIL_ACTION,
                 default=options.get(CONF_EMAIL_ACTION, DEFAULT_EMAIL_ACTION),
-            )
-        ] = vol.In(EMAIL_ACTIONS)
-        schema_dict[
+            ): vol.In(EMAIL_ACTIONS),
             vol.Required(
                 CONF_EMAIL_ARCHIVE_FOLDER,
                 default=options.get(CONF_EMAIL_ARCHIVE_FOLDER, DEFAULT_EMAIL_ARCHIVE_FOLDER),
-            )
-        ] = str
-
-        # ── Notifications ─────────────────────────────────────────────────
-        schema_dict[
+            ): str,
             vol.Required(
                 CONF_NOTIFY_ON_FAILURE,
                 default=options.get(CONF_NOTIFY_ON_FAILURE, DEFAULT_NOTIFY_ON_FAILURE),
-            )
-        ] = bool
-        schema_dict[
+            ): bool,
             vol.Required(
                 CONF_NOTIFY_ON_SUCCESS,
                 default=options.get(CONF_NOTIFY_ON_SUCCESS, DEFAULT_NOTIFY_ON_SUCCESS),
-            )
-        ] = bool
-
-        # ── Print schedule ────────────────────────────────────────────────
-        schema_dict[
+            ): bool,
             vol.Required(
                 CONF_SCHEDULE_ENABLED,
                 default=options.get(CONF_SCHEDULE_ENABLED, DEFAULT_SCHEDULE_ENABLED),
-            )
-        ] = bool
-        schema_dict[
+            ): bool,
             vol.Required(
                 CONF_SCHEDULE_START,
                 default=options.get(CONF_SCHEDULE_START, DEFAULT_SCHEDULE_START),
-            )
-        ] = str
-        schema_dict[
+            ): str,
             vol.Required(
                 CONF_SCHEDULE_END,
                 default=options.get(CONF_SCHEDULE_END, DEFAULT_SCHEDULE_END),
-            )
-        ] = str
+            ): str,
+        })
 
         return self.async_show_form(
             step_id="init",
@@ -513,35 +573,41 @@ class AutoPrintOptionsFlow(OptionsFlow):
 def _build_user_schema(
     cups_url: str | None,
     printers: list[str],
-    direct_urls: list[str],
+    mdns_printers: list[dict[str, str]],
     imap_entries: list[ConfigEntry],
 ) -> vol.Schema:
     schema: dict = {}
 
-    # ── Direct IPP (no CUPS) ───────────────────────────────────────────────
-    if direct_urls:
-        direct_options = {u: u for u in direct_urls}
-        direct_options[""] = "None (use CUPS below)"
+    # ── Direct IPP — mDNS discovered + manual entry ────────────────────────
+    mdns_urls = [p["url"] for p in mdns_printers]
+    if mdns_urls:
+        direct_options: dict[str, str] = {"": "None — use CUPS below"}
+        for p in mdns_printers:
+            direct_options[p["url"]] = f"{p['name']}  ({p['url']})"
         schema[vol.Optional(CONF_DIRECT_PRINTER_URL, default="")] = vol.In(direct_options)
     else:
         schema[vol.Optional(CONF_DIRECT_PRINTER_URL, default="")] = str
 
-    # ── CUPS ──────────────────────────────────────────────────────────────
-    schema[vol.Required(CONF_CUPS_URL, default=cups_url or DEFAULT_CUPS_URL)] = str
+    # ── CUPS — optional; only needed when not using Direct IPP ────────────
+    schema[vol.Optional(CONF_CUPS_URL, default=cups_url or "")] = str
 
     if printers:
         printer_options = {p: p for p in printers}
         printer_options[_SENTINEL_MANUAL] = "Enter name manually…"
-        schema[vol.Required(CONF_PRINTER_NAME, default=printers[0])] = vol.In(
+        schema[vol.Optional(CONF_PRINTER_NAME, default=printers[0])] = vol.In(
             printer_options
         )
     else:
-        schema[vol.Required(CONF_PRINTER_NAME)] = str
+        schema[vol.Optional(CONF_PRINTER_NAME, default="")] = str
 
+    # ── IMAP pre-fill ──────────────────────────────────────────────────────
     if imap_entries:
         schema[
             vol.Optional("imap_account", default=_SENTINEL_SKIP_IMAP)
         ] = vol.In(_imap_choices(imap_entries))
+
+    # ── Scan again ─────────────────────────────────────────────────────────
+    schema[vol.Optional("rescan", default=False)] = bool
 
     return vol.Schema(schema)
 
@@ -549,15 +615,17 @@ def _build_user_schema(
 def _build_placeholders(
     cups_url: str | None,
     printers: list[str],
-    direct_urls: list[str],
+    mdns_printers: list[dict[str, str]],
     imap_entries: list[ConfigEntry],
 ) -> dict[str, str]:
-    if direct_urls:
-        direct_info = f"Found direct IPP endpoint(s): {', '.join(direct_urls)}"
+    if mdns_printers:
+        names = ", ".join(p["name"] for p in mdns_printers)
+        direct_info = f"Found {len(mdns_printers)} printer(s) on the network via mDNS: {names}"
     else:
         direct_info = (
-            "No direct IPP printer found locally. "
-            "For a LAN printer, type its IPP URL (e.g. http://10.0.0.23/ipp/print)."
+            "No printers found via mDNS. "
+            "For a LAN printer, type its IPP URL (e.g. http://192.168.1.x/ipp/print). "
+            "Check the 'Scan again' box to retry discovery."
         )
 
     if printers:
@@ -569,8 +637,9 @@ def _build_placeholders(
         cups_info = f"CUPS is reachable at {cups_url} but has no printer queues yet."
     else:
         cups_info = (
-            "No CUPS server found at common addresses. "
-            "Enter the URL manually (e.g. http://10.0.0.23:631)."
+            "No CUPS server found on this host. "
+            "Leave CUPS URL empty if using a Direct IPP URL above, "
+            "or enter your CUPS server URL (e.g. http://192.168.1.x:631)."
         )
 
     if imap_entries:
@@ -578,8 +647,8 @@ def _build_placeholders(
         imap_info = f"Found {len(imap_entries)} IMAP account(s): {names}"
     else:
         imap_info = (
-            "No IMAP accounts configured in HA yet. "
-            "Add the IMAP integration first."
+            "No IMAP accounts configured. "
+            "Add the HA IMAP integration first."
         )
 
     return {

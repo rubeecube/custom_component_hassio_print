@@ -5,16 +5,18 @@
         "title": "Printer Setup",
         "description": "{direct_info}\n\n{cups_info}\n\n{imap_info}",
         "data": {
-          "direct_printer_url": "Direct IPP Printer URL (optional, bypasses CUPS)",
-          "cups_url": "CUPS Base URL",
-          "printer_name": "Printer (CUPS queue)",
-          "imap_account": "Pre-fill Allowed Senders from IMAP Account"
+          "direct_printer_url": "Direct IPP Printer URL (AirPrint / no CUPS)",
+          "cups_url": "CUPS Base URL (optional)",
+          "printer_name": "Printer Queue Name (optional)",
+          "imap_account": "Pre-fill Allowed Senders from IMAP Account",
+          "rescan": "Scan for printers again"
         },
         "data_description": {
-          "direct_printer_url": "For AirPrint / IPP-capable printers: enter the printer's IPP endpoint directly (e.g. http://10.0.0.23/ipp/print or ipp://10.0.0.23/ipp/print). Leave empty to use CUPS below.",
-          "cups_url": "Base URL of your CUPS server. Ignored when a Direct IPP URL is set above.",
-          "printer_name": "Select a discovered printer queue, or choose 'Enter name manually…'. Ignored when Direct IPP URL is set.",
-          "imap_account": "Select an IMAP account to automatically add its address to Allowed Senders. You can change this later in Options."
+          "direct_printer_url": "Select a printer discovered via mDNS, or type its IPP URL (e.g. http://192.168.1.x/ipp/print). Leave empty to use CUPS below.",
+          "cups_url": "Only needed when NOT using a Direct IPP URL. Enter your CUPS server URL (e.g. http://192.168.1.x:631). Leave empty for Direct IPP mode.",
+          "printer_name": "Only needed for CUPS mode. Select a discovered queue or type it manually. Leave empty for Direct IPP mode.",
+          "imap_account": "Select an IMAP account to automatically add its address to Allowed Senders. You can change this later in Options.",
+          "rescan": "Check this box and click Submit to re-scan your network for printers."
         }
       },
       "manual_printer": {
@@ -26,7 +28,8 @@
       }
     },
     "error": {
-      "cannot_connect_cups": "Cannot reach the CUPS server. Check that CUPS is running and the URL is correct.",
+      "cannot_connect_cups": "Cannot reach the CUPS server or IPP printer. Check the URL and that the device is online.",
+      "cups_or_direct_required": "Please provide either a Direct IPP URL or a CUPS Base URL + Printer Queue Name.",
       "unknown": "Unexpected error — see the Home Assistant logs for details."
     },
     "abort": {

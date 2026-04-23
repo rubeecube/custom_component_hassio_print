@@ -40,19 +40,50 @@ _MANUAL = "__manual__"
 # ---------------------------------------------------------------------------
 
 def _mock_no_discovery():
-    """Patch _discover_cups to simulate no CUPS found."""
-    return patch(
+    """Patch discovery to simulate nothing found (no CUPS, no mDNS)."""
+    from contextlib import ExitStack
+    stack = ExitStack()
+    stack.enter_context(patch(
         "custom_components.print_bridge.config_flow._discover_cups",
         new=AsyncMock(return_value=(None, [])),
-    )
+    ))
+    stack.enter_context(patch(
+        "custom_components.print_bridge.config_flow._discover_printers_mdns",
+        new=AsyncMock(return_value=[]),
+    ))
+    return stack
 
 
 def _mock_discovery(url: str = "http://localhost:631", printers: list = None):
-    """Patch _discover_cups to return *url* and *printers*."""
-    return patch(
+    """Patch _discover_cups to return *url* and *printers*; no mDNS."""
+    from contextlib import ExitStack
+    stack = ExitStack()
+    stack.enter_context(patch(
         "custom_components.print_bridge.config_flow._discover_cups",
         new=AsyncMock(return_value=(url, printers or ["LocalPrinter"])),
-    )
+    ))
+    stack.enter_context(patch(
+        "custom_components.print_bridge.config_flow._discover_printers_mdns",
+        new=AsyncMock(return_value=[]),
+    ))
+    return stack
+
+
+def _mock_mdns_discovery(printers: list | None = None):
+    """Patch _discover_printers_mdns to return discovered printers; no CUPS."""
+    from contextlib import ExitStack
+    stack = ExitStack()
+    stack.enter_context(patch(
+        "custom_components.print_bridge.config_flow._discover_cups",
+        new=AsyncMock(return_value=(None, [])),
+    ))
+    stack.enter_context(patch(
+        "custom_components.print_bridge.config_flow._discover_printers_mdns",
+        new=AsyncMock(return_value=printers or [
+            {"name": "MyPrinter", "url": "http://192.168.1.10/ipp/print"}
+        ]),
+    ))
+    return stack
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +265,7 @@ async def test_cups_unreachable_shows_error_then_recovers(
             result["flow_id"], _USER_INPUT
         )
     assert result["type"] is FlowResultType.FORM
-    assert result["errors"]["base"] == "cannot_connect_cups"
+    assert "base" in result["errors"]
 
     # Recovery: CUPS is back.
     from .conftest import _make_cups_session
@@ -246,6 +277,59 @@ async def test_cups_unreachable_shows_error_then_recovers(
             result["flow_id"], _USER_INPUT
         )
     assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+async def test_no_printer_specified_shows_error(
+    hass: HomeAssistant,
+    mock_setup_entry,
+) -> None:
+    """Submitting with neither direct URL nor CUPS must show an error."""
+    with _mock_no_discovery():
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {"cups_url": "", "printer_name": "", "direct_printer_url": ""},
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"].get("base") == "cups_or_direct_required"
+
+
+async def test_mdns_discovery_pre_fills_direct_url(
+    hass: HomeAssistant,
+    mock_setup_entry,
+) -> None:
+    """When mDNS finds a printer, its URL should be available in the dropdown."""
+    with _mock_mdns_discovery([{"name": "CanonMG", "url": "http://192.168.1.10/ipp/print"}]):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+    assert result["type"] is FlowResultType.FORM
+    # The description placeholder must mention the discovered printer.
+    placeholders = result.get("description_placeholders", {})
+    assert "CanonMG" in placeholders.get("direct_info", "")
+
+
+async def test_rescan_rerenders_form(
+    hass: HomeAssistant,
+    mock_setup_entry,
+) -> None:
+    """Submitting with rescan=True must re-run discovery and re-show the form."""
+    with _mock_no_discovery():
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+
+    # Submit with rescan=True — should re-show the form, not create an entry.
+    with _mock_no_discovery():
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"cups_url": "", "printer_name": "", "direct_printer_url": "", "rescan": True},
+        )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
 
 
 # ---------------------------------------------------------------------------

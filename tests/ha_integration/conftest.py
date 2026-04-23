@@ -83,11 +83,15 @@ def _make_cups_session(status: int = 200) -> MagicMock:
 
 @pytest.fixture
 def mock_cups_ok():
-    """Mock reachable CUPS; patch both _discover_cups and async_get_clientsession."""
+    """Mock reachable CUPS + no mDNS printers; patch clientsession."""
     with (
         patch(
             "custom_components.print_bridge.config_flow._discover_cups",
             new=AsyncMock(return_value=(None, [])),
+        ),
+        patch(
+            "custom_components.print_bridge.config_flow._discover_printers_mdns",
+            new=AsyncMock(return_value=[]),
         ),
         patch(
             "custom_components.print_bridge.config_flow.async_get_clientsession",
@@ -104,6 +108,10 @@ def mock_cups_unreachable():
         patch(
             "custom_components.print_bridge.config_flow._discover_cups",
             new=AsyncMock(return_value=(None, [])),
+        ),
+        patch(
+            "custom_components.print_bridge.config_flow._discover_printers_mdns",
+            new=AsyncMock(return_value=[]),
         ),
         patch(
             "custom_components.print_bridge.config_flow.async_get_clientsession",
