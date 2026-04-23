@@ -11,7 +11,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import BUTTON_CHECK_FILTER, BUTTON_RETRY_LAST_FAILED, BUTTON_TEST_PAGE, DOMAIN
+from .const import BUTTON_CHECK_FILTER, BUTTON_FLUSH_PENDING, BUTTON_RETRY_LAST_FAILED, BUTTON_TEST_PAGE, DOMAIN
 from .coordinator import AutoPrintCoordinator
 from .sensor import _device_info
 
@@ -53,6 +53,7 @@ async def async_setup_entry(
         TestPageButton(coordinator, entry),
         CheckFilterButton(coordinator, entry),
         RetryLastFailedButton(coordinator, entry),
+        FlushPendingButton(coordinator, entry),
     ])
 
 
@@ -123,3 +124,26 @@ class RetryLastFailedButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntit
     async def async_press(self) -> None:
         """Retry the most recent failed job."""
         await self.coordinator.async_retry_last_failed()
+
+
+class FlushPendingButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):
+    """Print all schedule-queued jobs immediately, regardless of the time window."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = BUTTON_FLUSH_PENDING
+    _attr_icon = "mdi:printer-off-outline"
+
+    def __init__(self, coordinator: AutoPrintCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_{BUTTON_FLUSH_PENDING}"
+        self._attr_device_info = _device_info(entry)
+
+    @property
+    def available(self) -> bool:
+        """Only available when there are pending jobs."""
+        data = self.coordinator.data
+        return bool(data and data.pending_jobs)
+
+    async def async_press(self) -> None:
+        """Flush the schedule queue and print all waiting jobs now."""
+        await self.coordinator.async_flush_pending()

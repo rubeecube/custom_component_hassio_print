@@ -39,6 +39,12 @@ cards:
         icon: mdi:file-multiple
 
       - type: entity
+        entity: sensor.auto_print_PRINTER_NAME_scheduled_queue
+        name: Scheduled Queue
+        icon: mdi:clock-outline
+        state_color: true
+
+      - type: entity
         entity: sensor.auto_print_PRINTER_NAME_job_log
         name: Jobs Sent
         icon: mdi:counter
@@ -115,6 +121,9 @@ cards:
   - type: entities
     title: Actions
     entities:
+      - entity: button.auto_print_PRINTER_NAME_print_queued_jobs_now
+        name: Print Queued Jobs Now (bypass schedule)
+
       - entity: button.auto_print_PRINTER_NAME_retry_last_failed_job
         name: Retry Last Failed Job
 

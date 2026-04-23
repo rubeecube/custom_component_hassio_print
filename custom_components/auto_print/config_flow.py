@@ -18,6 +18,8 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResu
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+import re as _re
+
 from .const import (
     CONF_ALLOWED_SENDERS,
     CONF_AUTO_DELETE,
@@ -32,6 +34,9 @@ from .const import (
     CONF_NOTIFY_ON_SUCCESS,
     CONF_PRINTER_NAME,
     CONF_QUEUE_FOLDER,
+    CONF_SCHEDULE_ENABLED,
+    CONF_SCHEDULE_END,
+    CONF_SCHEDULE_START,
     DEFAULT_AUTO_DELETE,
     DEFAULT_CUPS_URL,
     DEFAULT_DUPLEX_MODE,
@@ -40,11 +45,16 @@ from .const import (
     DEFAULT_NOTIFY_ON_FAILURE,
     DEFAULT_NOTIFY_ON_SUCCESS,
     DEFAULT_QUEUE_FOLDER,
+    DEFAULT_SCHEDULE_ENABLED,
+    DEFAULT_SCHEDULE_END,
+    DEFAULT_SCHEDULE_START,
     DOMAIN,
     DUPLEX_MODES,
     EMAIL_ACTIONS,
 )
 from .print_handler import http_url_to_ipp_uri
+
+_HHMM_PATTERN = _re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 logger = logging.getLogger(__name__)
 
@@ -352,6 +362,7 @@ class AutoPrintOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         options = self._config_entry.options
         imap_entries = list(self.hass.config_entries.async_entries("imap"))
+        errors: dict[str, str] = {}
 
         if user_input is not None:
             # Optional: append the username from a selected IMAP entry.
@@ -376,16 +387,26 @@ class AutoPrintOptionsFlow(OptionsFlow):
                 for f in user_input.get(CONF_FOLDER_FILTER, "").splitlines()
                 if f.strip()
             ]
-            return self.async_create_entry(
-                title="",
-                data={
-                    **user_input,
-                    CONF_BOOKLET_PATTERNS: patterns,
-                    CONF_ALLOWED_SENDERS: senders,
-                    CONF_FOLDER_FILTER: folders,
-                    # Boolean / select fields are stored as-is
-                },
-            )
+
+            # Validate HH:MM schedule fields.
+            for time_key in (CONF_SCHEDULE_START, CONF_SCHEDULE_END):
+                val = user_input.get(time_key, "")
+                if val and not _HHMM_PATTERN.match(val):
+                    errors[time_key] = "invalid_time_format"
+
+            if errors:
+                # Re-show form with errors.
+                pass
+            else:
+                return self.async_create_entry(
+                    title="",
+                    data={
+                        **user_input,
+                        CONF_BOOKLET_PATTERNS: patterns,
+                        CONF_ALLOWED_SENDERS: senders,
+                        CONF_FOLDER_FILTER: folders,
+                    },
+                )
 
         current_patterns = options.get(CONF_BOOKLET_PATTERNS, [])
         current_senders = options.get(CONF_ALLOWED_SENDERS, [])
@@ -455,9 +476,30 @@ class AutoPrintOptionsFlow(OptionsFlow):
             )
         ] = bool
 
+        # ── Print schedule ────────────────────────────────────────────────
+        schema_dict[
+            vol.Required(
+                CONF_SCHEDULE_ENABLED,
+                default=options.get(CONF_SCHEDULE_ENABLED, DEFAULT_SCHEDULE_ENABLED),
+            )
+        ] = bool
+        schema_dict[
+            vol.Required(
+                CONF_SCHEDULE_START,
+                default=options.get(CONF_SCHEDULE_START, DEFAULT_SCHEDULE_START),
+            )
+        ] = str
+        schema_dict[
+            vol.Required(
+                CONF_SCHEDULE_END,
+                default=options.get(CONF_SCHEDULE_END, DEFAULT_SCHEDULE_END),
+            )
+        ] = str
+
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(schema_dict),
+            errors=errors,
             description_placeholders={"imap_folders": imap_folder_hint},
         )
 

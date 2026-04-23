@@ -40,6 +40,9 @@ from .const import (
     CONF_NOTIFY_ON_SUCCESS,
     CONF_PRINTER_NAME,
     CONF_QUEUE_FOLDER,
+    CONF_SCHEDULE_ENABLED,
+    CONF_SCHEDULE_END,
+    CONF_SCHEDULE_START,
     DEFAULT_AUTO_DELETE,
     DEFAULT_DUPLEX_MODE,
     DEFAULT_EMAIL_ACTION,
@@ -47,6 +50,9 @@ from .const import (
     DEFAULT_NOTIFY_ON_FAILURE,
     DEFAULT_NOTIFY_ON_SUCCESS,
     DEFAULT_QUEUE_FOLDER,
+    DEFAULT_SCHEDULE_ENABLED,
+    DEFAULT_SCHEDULE_END,
+    DEFAULT_SCHEDULE_START,
     DOMAIN,
     EVENT_JOB_COMPLETED,
 )
@@ -101,6 +107,30 @@ class FilterPreviewResult:
 
 
 @dataclass
+class PendingJob:
+    """A print job held in the schedule queue (outside allowed print hours)."""
+
+    entry_id: str
+    uid: str
+    part_key: str
+    filename: str
+    sender: str | None = None
+    duplex_override: str | None = None
+    booklet_override: bool | None = None
+    queued_at: str = field(
+        default_factory=lambda: datetime.now().isoformat(timespec="seconds")
+    )
+
+    def as_dict(self) -> dict:
+        return {
+            "filename": self.filename,
+            "sender": self.sender,
+            "queued_at": self.queued_at,
+            "uid": self.uid,
+        }
+
+
+@dataclass
 class AutoPrintData:
     """Snapshot of integration state exposed to entities."""
 
@@ -110,6 +140,7 @@ class AutoPrintData:
     job_history: list[PrintJobResult] = field(default_factory=list)
     total_jobs_sent: int = 0
     filter_preview: FilterPreviewResult | None = None
+    pending_jobs: list[PendingJob] = field(default_factory=list)
 
 
 class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
@@ -126,6 +157,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         self._job_history: list[PrintJobResult] = []
         self._total_jobs_sent: int = 0
         self._filter_preview: FilterPreviewResult | None = None
+        self._pending_jobs: list[PendingJob] = []
+        self._last_schedule_state: bool | None = None  # track open↔closed transitions
 
     # ------------------------------------------------------------------
     # Properties
@@ -195,6 +228,35 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         return [f.strip() for f in self._entry.options.get(CONF_FOLDER_FILTER, []) if f.strip()]
 
     @property
+    def _schedule_enabled(self) -> bool:
+        return bool(self._entry.options.get(CONF_SCHEDULE_ENABLED, DEFAULT_SCHEDULE_ENABLED))
+
+    @property
+    def _schedule_start(self) -> str:
+        return self._entry.options.get(CONF_SCHEDULE_START, DEFAULT_SCHEDULE_START)
+
+    @property
+    def _schedule_end(self) -> str:
+        return self._entry.options.get(CONF_SCHEDULE_END, DEFAULT_SCHEDULE_END)
+
+    def _is_within_schedule(self) -> bool:
+        """Return True if the current local time is inside the print window."""
+        if not self._schedule_enabled:
+            return True
+        try:
+            from homeassistant.util import dt as dt_util
+            now = dt_util.now().time()
+            start = datetime.strptime(self._schedule_start, "%H:%M").time()
+            end = datetime.strptime(self._schedule_end, "%H:%M").time()
+        except ValueError:
+            return True  # bad config → default to always allowed
+
+        if start <= end:
+            return start <= now <= end
+        # Window wraps midnight (e.g. 22:00 → 07:00)
+        return now >= start or now <= end
+
+    @property
     def _email_action(self) -> str:
         return self._entry.options.get(CONF_EMAIL_ACTION, DEFAULT_EMAIL_ACTION)
 
@@ -246,6 +308,41 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 or part_info.get("file_name")
                 or f"document_{part_key}.pdf"
             )
+
+            # Schedule check — queue the job if outside the allowed window.
+            if not self._is_within_schedule():
+                pending = PendingJob(
+                    entry_id=entry_id,
+                    uid=uid,
+                    part_key=part_key,
+                    filename=filename,
+                    sender=sender,
+                    duplex_override=None,
+                    booklet_override=None,
+                )
+                self._pending_jobs.append(pending)
+                logger.info(
+                    "Job '%s' queued — outside print schedule (%s–%s)",
+                    filename, self._schedule_start, self._schedule_end,
+                )
+                try:
+                    await self.hass.services.async_call(
+                        "persistent_notification", "create",
+                        {
+                            "title": "Auto Print — Job queued",
+                            "message": (
+                                f"**{filename}** from {sender or 'unknown'} was received "
+                                f"outside the print schedule ({self._schedule_start}–"
+                                f"{self._schedule_end}) and will be printed when the "
+                                f"window opens."
+                            ),
+                            "notification_id": f"auto_print_queued_{entry_id}_{uid}",
+                        },
+                    )
+                except Exception:
+                    pass
+                continue  # don't print now
+
             result = await self._async_fetch_and_print(
                 entry_id=entry_id,
                 uid=uid,
@@ -648,10 +745,51 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
     # Coordinator periodic update (printer status only)
     # ------------------------------------------------------------------
 
+    async def async_flush_pending(self) -> int:
+        """Print all pending (schedule-queued) jobs immediately.
+
+        Returns the number of jobs dispatched.
+        """
+        if not self._pending_jobs:
+            return 0
+
+        jobs = list(self._pending_jobs)
+        self._pending_jobs.clear()
+        logger.info("Flushing %d pending job(s) from schedule queue", len(jobs))
+
+        for job in jobs:
+            result = await self._async_fetch_and_print(
+                entry_id=job.entry_id,
+                uid=job.uid,
+                part_key=job.part_key,
+                filename=job.filename,
+                duplex_override=job.duplex_override,
+                booklet_override=job.booklet_override,
+                sender=job.sender,
+            )
+            self._record_job(result)
+            await self._async_notify_job(result)
+
+        await self.async_request_refresh()
+        return len(jobs)
+
     async def _async_update_data(self) -> AutoPrintData:
-        """Check printer reachability and queue depth."""
+        """Check printer reachability, queue depth, and flush pending if schedule just opened."""
         printer_online = await self._async_check_printer_online()
         queue_depth = self._count_queue_files()
+
+        # Auto-flush pending jobs when the print window opens.
+        currently_open = self._is_within_schedule()
+        if (
+            self._pending_jobs
+            and currently_open
+            and self._last_schedule_state is False   # was closed last check
+        ):
+            logger.info("Print window opened — flushing %d pending job(s)", len(self._pending_jobs))
+            await self.async_flush_pending()
+
+        self._last_schedule_state = currently_open
+
         last_job = self._job_history[0] if self._job_history else None
         return AutoPrintData(
             queue_depth=queue_depth,
@@ -660,6 +798,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             job_history=list(self._job_history),
             total_jobs_sent=self._total_jobs_sent,
             filter_preview=self._filter_preview,
+            pending_jobs=list(self._pending_jobs),
         )
 
     # ------------------------------------------------------------------

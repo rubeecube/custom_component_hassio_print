@@ -20,6 +20,7 @@ from .const import (
     SENSOR_FILTER_PREVIEW,
     SENSOR_JOB_LOG,
     SENSOR_LAST_JOB,
+    SENSOR_PENDING_JOBS,
     SENSOR_QUEUE_DEPTH,
 )
 from .coordinator import AutoPrintCoordinator, AutoPrintData
@@ -39,6 +40,7 @@ async def async_setup_entry(
             LastJobSensor(coordinator, entry),
             JobLogSensor(coordinator, entry),
             FilterPreviewSensor(coordinator, entry),
+            PendingJobsSensor(coordinator, entry),
         ]
     )
 
@@ -193,4 +195,45 @@ class FilterPreviewSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity)
             "matching_filter": preview.matching,
             "with_pdf": preview.with_pdf,
             "emails": [e.as_dict() for e in preview.emails],
+        }
+
+
+class PendingJobsSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
+    """Jobs held in the schedule queue, waiting for the print window to open.
+
+    state      : number of queued jobs
+    attributes : jobs[] list with filename, sender, queued_at, uid
+                 schedule_start, schedule_end, schedule_enabled
+    """
+
+    _attr_has_entity_name = True
+    _attr_translation_key = SENSOR_PENDING_JOBS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "jobs"
+    _attr_icon = "mdi:clock-outline"
+
+    def __init__(self, coordinator: AutoPrintCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_{SENSOR_PENDING_JOBS}"
+        self._attr_device_info = _device_info(entry)
+        self._entry = entry
+
+    @property
+    def native_value(self) -> int:
+        data = self.coordinator.data
+        return len(data.pending_jobs) if data else 0
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        from .const import (
+            CONF_SCHEDULE_ENABLED, CONF_SCHEDULE_START, CONF_SCHEDULE_END,
+            DEFAULT_SCHEDULE_ENABLED, DEFAULT_SCHEDULE_START, DEFAULT_SCHEDULE_END,
+        )
+        opts = self._entry.options
+        data = self.coordinator.data
+        return {
+            "schedule_enabled": opts.get(CONF_SCHEDULE_ENABLED, DEFAULT_SCHEDULE_ENABLED),
+            "schedule_start": opts.get(CONF_SCHEDULE_START, DEFAULT_SCHEDULE_START),
+            "schedule_end": opts.get(CONF_SCHEDULE_END, DEFAULT_SCHEDULE_END),
+            "jobs": [j.as_dict() for j in (data.pending_jobs if data else [])],
         }

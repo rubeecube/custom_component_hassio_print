@@ -29,6 +29,9 @@ CONF_EMAIL_ACTION = "email_action_after_print"     # what to do with the email a
 CONF_EMAIL_ARCHIVE_FOLDER = "email_archive_folder" # target folder when action = "move"
 CONF_NOTIFY_ON_FAILURE = "notify_on_failure"       # send HA notification when print fails
 CONF_NOTIFY_ON_SUCCESS = "notify_on_success"       # send HA notification when print succeeds
+CONF_SCHEDULE_ENABLED = "schedule_enabled"         # enable print time window
+CONF_SCHEDULE_START = "schedule_start"             # "HH:MM" — start of allowed window
+CONF_SCHEDULE_END = "schedule_end"                 # "HH:MM" — end of allowed window
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -41,6 +44,9 @@ DEFAULT_EMAIL_ACTION = "none"
 DEFAULT_EMAIL_ARCHIVE_FOLDER = "INBOX/Printed"
 DEFAULT_NOTIFY_ON_FAILURE = True
 DEFAULT_NOTIFY_ON_SUCCESS = False
+DEFAULT_SCHEDULE_ENABLED = False
+DEFAULT_SCHEDULE_START = "07:00"
+DEFAULT_SCHEDULE_END = "22:00"
 
 # Choices for the email_action_after_print option
 EMAIL_ACTIONS: dict[str, str] = {
@@ -77,10 +83,12 @@ SENSOR_QUEUE_DEPTH = "queue_depth"
 SENSOR_LAST_JOB = "last_job"
 SENSOR_JOB_LOG = "job_log"
 SENSOR_FILTER_PREVIEW = "filter_preview"
+SENSOR_PENDING_JOBS = "pending_jobs"
 BINARY_SENSOR_PRINTER_ONLINE = "printer_online"
 BUTTON_TEST_PAGE = "test_page"
 BUTTON_CHECK_FILTER = "check_filter"
 BUTTON_RETRY_LAST_FAILED = "retry_last_failed"
+BUTTON_FLUSH_PENDING = "flush_pending"
 
 # Event fired after each print job — appears in HA Logbook
 EVENT_JOB_COMPLETED = "auto_print_job_completed"
