@@ -1,5 +1,9 @@
 # Credentials — never commit
 .env
+docker/ha-config/secrets.yaml
+
+# Editor scratch files
+x
 
 # Python artifacts
 *.pyc
