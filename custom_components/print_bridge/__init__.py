@@ -32,7 +32,7 @@ from .const import (
     SERVICE_PROCESS_IMAP_PART,
     SERVICE_RETRY_JOB,
 )
-from .coordinator import AutoPrintCoordinator
+from .coordinator import AutoPrintCoordinator, _is_pdf_part
 
 logger = logging.getLogger(__name__)
 
@@ -350,7 +350,7 @@ def _register_services(hass: HomeAssistant) -> None:
         parts: dict = fetch_result.get("parts", {})
         pdf_parts = {
             k: v for k, v in parts.items()
-            if v.get("content_type") == "application/pdf"
+            if _is_pdf_part(v)
         }
 
         if not pdf_parts:

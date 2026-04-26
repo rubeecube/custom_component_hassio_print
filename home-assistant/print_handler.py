@@ -63,7 +63,27 @@ def _ipp_attr(tag: int, name: str, value: str) -> bytes:
     )
 
 
-def build_ipp_packet(printer_name: str, file_name: str, sides: str, pdf_data: bytes) -> bytes:
+def _cups_printer_uri(cups_base_url: str, printer_name: str) -> str:
+    base = cups_base_url.rstrip("/")
+    if base.startswith("http://"):
+        ipp_base = "ipp://" + base[len("http://"):]
+    elif base.startswith("https://"):
+        ipp_base = "ipps://" + base[len("https://"):]
+    else:
+        ipp_base = base
+    return f"{ipp_base}/printers/{printer_name}"
+
+
+def _ipp_status(response: bytes) -> tuple[bool, str]:
+    if len(response) < 4:
+        return False, "Invalid IPP response: shorter than 4 bytes"
+    if response[0] not in (1, 2):
+        return False, f"Invalid IPP response version: {response[0]}.{response[1]}"
+    status_code = struct.unpack(">H", response[2:4])[0]
+    return status_code < 0x0100, f"IPP 0x{status_code:04x}"
+
+
+def build_ipp_packet(printer_uri: str, file_name: str, sides: str, pdf_data: bytes) -> bytes:
     """Construct a valid IPP 2.0 Print-Job request packet."""
     # 2-byte version (2.0) + 2-byte operation-id (0x0002 = Print-Job) + 4-byte request-id
     header = struct.pack(">HHI", 0x0200, 0x0002, 0x00000001)
@@ -72,7 +92,7 @@ def build_ipp_packet(printer_name: str, file_name: str, sides: str, pdf_data: by
     header += b"\x01"
     header += _ipp_attr(0x47, "attributes-charset", "utf-8")
     header += _ipp_attr(0x48, "attributes-natural-language", "en")
-    header += _ipp_attr(0x45, "printer-uri", f"ipp://localhost/printers/{printer_name}")
+    header += _ipp_attr(0x45, "printer-uri", printer_uri)
     header += _ipp_attr(0x42, "job-name", file_name)
     header += _ipp_attr(0x49, "document-format", "application/pdf")
 
@@ -132,7 +152,12 @@ def print_pdf(file_path: str, duplex_input: str) -> bool:
         with open(print_file, "rb") as f:
             pdf_data = f.read()
 
-        packet = build_ipp_packet(PRINTER_NAME, file_name, sides, pdf_data)
+        packet = build_ipp_packet(
+            _cups_printer_uri(CUPS_BASE_URL, PRINTER_NAME),
+            file_name,
+            sides,
+            pdf_data,
+        )
 
         response = requests.post(
             IPP_URL,
@@ -141,12 +166,19 @@ def print_pdf(file_path: str, duplex_input: str) -> bool:
             timeout=30,
         )
 
-        if response.status_code == 200 and "<!DOCTYPE HTML>" not in response.text:
+        body_prefix = response.content[:256].lstrip().lower()
+        ipp_ok, ipp_status = _ipp_status(response.content)
+        if (
+            response.status_code == 200
+            and not body_prefix.startswith((b"<!doctype html", b"<html"))
+            and ipp_ok
+        ):
             logger.debug("Job accepted by CUPS for '%s'", file_name)
             return True
 
         logger.error(
-            "CUPS rejected job for '%s': HTTP %d", file_name, response.status_code
+            "CUPS rejected job for '%s': HTTP %d %s",
+            file_name, response.status_code, ipp_status,
         )
         return False
 

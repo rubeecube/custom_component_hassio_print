@@ -28,8 +28,13 @@ delete_printed_file: >-
 process_print_queue: >-
   FILE_PATH=$(python3 /config/pdf_downloader.py "{{ uid }}" "{{ filename }}");
   if [ -n "$FILE_PATH" ] && [ -f "$FILE_PATH" ]; then
-    python3 /config/print_handler.py "$FILE_PATH" "{{ duplex_state }}";
-    rm -- "$FILE_PATH";
+    if python3 /config/print_handler.py "$FILE_PATH" "{{ duplex_state }}"; then
+      rm -- "$FILE_PATH";
+    else
+      echo "print_handler failed for $FILE_PATH" >&2;
+      exit 1;
+    fi;
   else
     echo "pdf_downloader returned no file for uid={{ uid }} filename={{ filename }}" >&2;
+    exit 1;
   fi

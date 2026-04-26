@@ -14,11 +14,13 @@ Covers:
 from __future__ import annotations
 
 import base64
+import struct
 from datetime import time as dt_time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from aiohttp import web
 import pytest
-from homeassistant.core import Event, HomeAssistant
+from homeassistant.core import Event, HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -40,7 +42,9 @@ _FAKE_PDF = b"%PDF-1.4 fake"
 # ---------------------------------------------------------------------------
 
 async def _setup_coordinator(
-    hass: HomeAssistant, options: dict | None = None
+    hass: HomeAssistant,
+    options: dict | None = None,
+    data: dict | None = None,
 ) -> tuple[MockConfigEntry, AutoPrintCoordinator]:
     with patch(
         "custom_components.print_bridge.coordinator.AutoPrintCoordinator._async_update_data",
@@ -48,7 +52,7 @@ async def _setup_coordinator(
     ):
         entry = MockConfigEntry(
             domain=DOMAIN,
-            data=MOCK_CONFIG_DATA,
+            data=data if data is not None else MOCK_CONFIG_DATA,
             options=options if options is not None else MOCK_OPTIONS,
         )
         entry.add_to_hass(hass)
@@ -77,6 +81,52 @@ def _pdf_parts(filename: str = "document.pdf") -> dict:
             "content_transfer_encoding": "base64",
         }
     }
+
+
+def _ipp_response(status_code: int = 0x0000) -> bytes:
+    return struct.pack(">HHI", 0x0200, status_code, 1) + b"\x03"
+
+
+async def _start_fake_ipp_server(status_code: int = 0x0000):
+    received: dict = {}
+
+    async def _handle_print(request: web.Request) -> web.Response:
+        received["method"] = request.method
+        received["path"] = request.path
+        received["content_type"] = request.headers.get("Content-Type")
+        received["body"] = await request.read()
+        return web.Response(
+            body=_ipp_response(status_code),
+            content_type="application/ipp",
+        )
+
+    app = web.Application()
+    app.router.add_post("/printers/TestPrinter", _handle_print)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    sockets = site._server.sockets  # type: ignore[union-attr]
+    port = sockets[0].getsockname()[1]
+    return f"http://127.0.0.1:{port}", received, runner
+
+
+def _register_fake_imap_fetch_part(hass: HomeAssistant) -> None:
+    async def _fetch_part(call: ServiceCall) -> dict:
+        assert call.data["entry"] == "imap_entry_1"
+        assert call.data["uid"] == "99"
+        assert call.data["part"] == "1"
+        return {
+            "part_data": base64.b64encode(_FAKE_PDF).decode(),
+            "content_transfer_encoding": "base64",
+        }
+
+    hass.services.async_register(
+        "imap",
+        "fetch_part",
+        _fetch_part,
+        supports_response=SupportsResponse.ONLY,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +243,24 @@ async def test_empty_allowed_senders_accepts_all(hass: HomeAssistant) -> None:
     ):
         await coordinator.async_handle_imap_event(
             _event(sender="anyone@anywhere.com", parts=_pdf_parts())
+        )
+    mock_fetch.assert_called_once()
+
+
+async def test_display_name_sender_is_processed(hass: HomeAssistant) -> None:
+    """Allowed-sender matching accepts display-name formatted event senders."""
+    _, coordinator = await _setup_coordinator(
+        hass, options={**MOCK_OPTIONS, "allowed_senders": ["sender@example.com"]}
+    )
+    success = PrintJobResult(filename="d.pdf", success=True)
+
+    with (
+        patch.object(coordinator, "_async_fetch_and_print",
+                     new=AsyncMock(return_value=success)) as mock_fetch,
+        patch.object(coordinator, "async_request_refresh", new=AsyncMock()),
+    ):
+        await coordinator.async_handle_imap_event(
+            _event(sender="Sender Name <sender@example.com>", parts=_pdf_parts())
         )
     mock_fetch.assert_called_once()
 
@@ -418,7 +486,7 @@ async def test_send_print_job_posts_to_ipp_endpoint(hass: HomeAssistant) -> None
     mock_resp.status = 200
     mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
     mock_resp.__aexit__ = AsyncMock(return_value=False)
-    mock_resp.text = AsyncMock(return_value="OK")
+    mock_resp.read = AsyncMock(return_value=_ipp_response())
 
     mock_session = MagicMock()
     mock_session.post.return_value = mock_resp
@@ -434,3 +502,66 @@ async def test_send_print_job_posts_to_ipp_endpoint(hass: HomeAssistant) -> None
     assert result.success is True
     post_url = mock_session.post.call_args.args[0]
     assert post_url == "http://10.0.0.1:631/printers/TestPrinter"
+
+
+async def test_send_print_job_rejects_ipp_error_body(hass: HomeAssistant) -> None:
+    """HTTP 200 is not enough; the IPP response status must also be successful."""
+    _, coordinator = await _setup_coordinator(hass)
+
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+    mock_resp.read = AsyncMock(return_value=_ipp_response(0x040A))
+
+    mock_session = MagicMock()
+    mock_session.post.return_value = mock_resp
+
+    with patch(
+        "custom_components.print_bridge.coordinator.async_get_clientsession",
+        return_value=mock_session,
+    ):
+        result = await coordinator.async_send_print_job(
+            "doc.pdf", _FAKE_PDF, "one-sided", False
+        )
+
+    assert result.success is False
+    assert "document-format-not-supported" in result.error
+
+
+async def test_imap_event_posts_pdf_to_fake_ipp_printer(
+    hass: HomeAssistant, socket_enabled: None
+) -> None:
+    """Exercise the event -> IMAP fetch_part -> IPP POST path over local HTTP."""
+    cups_url, received, runner = await _start_fake_ipp_server()
+    _register_fake_imap_fetch_part(hass)
+    try:
+        _, coordinator = await _setup_coordinator(
+            hass,
+            options={**MOCK_OPTIONS, "allowed_senders": ["sender@example.com"]},
+            data={"cups_url": cups_url, "printer_name": "TestPrinter"},
+        )
+
+        parts = {
+            "1": {
+                "content_type": "application/pdf; name=document.pdf",
+                "filename": "document.pdf",
+                "content_transfer_encoding": "base64",
+            }
+        }
+        await coordinator.async_handle_imap_event(
+            _event(sender="Sender Name <sender@example.com>", parts=parts)
+        )
+
+        port = cups_url.rsplit(":", 1)[1]
+        assert coordinator._job_history[0].success is True
+        assert received["path"] == "/printers/TestPrinter"
+        assert received["content_type"] == "application/ipp"
+        assert b"printer-uri" in received["body"]
+        assert (
+            f"ipp://127.0.0.1:{port}/printers/TestPrinter".encode()
+            in received["body"]
+        )
+        assert received["body"].endswith(_FAKE_PDF)
+    finally:
+        await runner.cleanup()

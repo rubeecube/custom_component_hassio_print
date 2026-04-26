@@ -11,11 +11,13 @@ Responsibilities:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from email.utils import parseaddr
 from typing import Any
 
 import aiohttp
@@ -64,6 +66,7 @@ from .print_handler import (
     cups_printer_uri,
     determine_sides,
     http_url_to_ipp_uri,
+    ipp_response_succeeded,
     is_booklet_job,
 )
 
@@ -90,6 +93,18 @@ def _decode_mime_filename(value: str) -> str:
         )
     except Exception:
         return value
+
+
+def _normalise_email_address(value: str) -> str:
+    """Return a lower-case bare email address from an IMAP sender string."""
+    _name, address = parseaddr(value or "")
+    return (address or value or "").strip().lower()
+
+
+def _is_pdf_part(part_info: dict[str, Any]) -> bool:
+    """Return True if an IMAP part metadata dict describes a PDF attachment."""
+    content_type = str(part_info.get("content_type", ""))
+    return content_type.split(";", 1)[0].strip().lower() == "application/pdf"
 
 
 @dataclass
@@ -245,7 +260,12 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
 
     @property
     def _allowed_senders(self) -> list[str]:
-        return [s.lower() for s in self._entry.options.get(CONF_ALLOWED_SENDERS, [])]
+        senders: list[str] = []
+        for sender in self._entry.options.get(CONF_ALLOWED_SENDERS, []):
+            normalised = _normalise_email_address(sender)
+            if normalised:
+                senders.append(normalised)
+        return senders
 
     @property
     def _folder_filter(self) -> list[str]:
@@ -316,7 +336,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             )
             return
 
-        sender: str = event.data.get("sender", "").lower()
+        sender: str = _normalise_email_address(event.data.get("sender", ""))
         allowed = self._allowed_senders
         if allowed and sender not in allowed:
             logger.debug("Skipping email from %s (not in allowed_senders)", sender)
@@ -338,7 +358,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         had_pdf = False
         actually_printed = False  # tracks whether any part was immediately printed
         for part_key, part_info in parts.items():
-            if part_info.get("content_type") != "application/pdf":
+            if not _is_pdf_part(part_info):
                 continue
 
             had_pdf = True
@@ -855,24 +875,43 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 headers={"Content-Type": "application/ipp"},
                 timeout=aiohttp.ClientTimeout(total=60),
             ) as resp:
-                body = await resp.text(errors="replace")
-                if resp.status == 200 and "<!DOCTYPE HTML>" not in body:
+                body = await resp.read()
+                body_prefix = body[:256].lstrip().lower()
+                if resp.status != 200:
+                    error = f"HTTP {resp.status}"
+                    logger.error("CUPS rejected job for '%s': %s", filename, error)
+                    return PrintJobResult(
+                        filename=filename, success=False, error=error,
+                        duplex=duplex_mode, booklet=booklet,
+                    )
+
+                if body_prefix.startswith(b"<!doctype html") or body_prefix.startswith(b"<html"):
+                    error = "HTTP 200 with HTML response"
+                    logger.error("CUPS rejected job for '%s': %s", filename, error)
+                    return PrintJobResult(
+                        filename=filename, success=False, error=error,
+                        duplex=duplex_mode, booklet=booklet,
+                    )
+
+                ipp_ok, ipp_status = ipp_response_succeeded(body)
+                if ipp_ok:
                     logger.debug(
-                        "Print job accepted for '%s' (sides=%s)", filename, sides
+                        "Print job accepted for '%s' (sides=%s, %s)",
+                        filename, sides, ipp_status,
                     )
                     return PrintJobResult(
                         filename=filename, success=True,
                         duplex=duplex_mode, booklet=booklet,
                     )
 
-                error = f"HTTP {resp.status}"
-                logger.error("CUPS rejected job for '%s': %s", filename, error)
+                error = ipp_status
+                logger.error("IPP rejected job for '%s': %s", filename, error)
                 return PrintJobResult(
                     filename=filename, success=False, error=error,
                     duplex=duplex_mode, booklet=booklet,
                 )
 
-        except aiohttp.ClientError as exc:
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             logger.error("Network error printing '%s': %s", filename, exc)
             return PrintJobResult(
                 filename=filename, success=False, error=str(exc),

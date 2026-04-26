@@ -13,7 +13,9 @@ import pytest
 from print_handler import (
     build_ipp_packet,
     determine_sides,
+    ipp_response_succeeded,
     is_booklet_job,
+    parse_ipp_response_status,
 )
 
 PDF_STUB = b"%PDF-1.4 minimal"
@@ -74,6 +76,37 @@ def test_ipp_packet_end_of_attributes_tag_present():
 def test_ipp_packet_job_name_encoded():
     pkt = build_ipp_packet(PRINTER, "my-document.pdf", "one-sided", PDF_STUB)
     assert b"my-document.pdf" in pkt
+
+
+def test_parse_successful_ipp_response():
+    body = struct.pack(">HHI", 0x0200, 0x0000, 1) + b"\x03"
+
+    status, description = parse_ipp_response_status(body)
+    ok, ok_description = ipp_response_succeeded(body)
+
+    assert status == 0x0000
+    assert "successful-ok" in description
+    assert ok is True
+    assert ok_description == description
+
+
+def test_parse_rejected_ipp_response():
+    body = struct.pack(">HHI", 0x0200, 0x040A, 1) + b"\x03"
+
+    status, description = parse_ipp_response_status(body)
+    ok, ok_description = ipp_response_succeeded(body)
+
+    assert status == 0x040A
+    assert "document-format-not-supported" in description
+    assert ok is False
+    assert ok_description == description
+
+
+def test_parse_html_response_is_not_ipp_success():
+    ok, description = ipp_response_succeeded(b"<!DOCTYPE HTML><html></html>")
+
+    assert ok is False
+    assert "Invalid IPP response version" in description
 
 
 # ── determine_sides ───────────────────────────────────────────────────────────

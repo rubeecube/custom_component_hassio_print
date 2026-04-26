@@ -35,6 +35,27 @@ _GROUP_OPERATION = b"\x01"
 _GROUP_JOB = b"\x02"
 _GROUP_END = b"\x03"
 
+_IPP_STATUS_NAMES = {
+    0x0000: "successful-ok",
+    0x0001: "successful-ok-ignored-or-substituted-attributes",
+    0x0002: "successful-ok-conflicting-attributes",
+    0x0400: "client-error-bad-request",
+    0x0403: "client-error-forbidden",
+    0x0404: "client-error-not-possible",
+    0x0405: "client-error-timeout",
+    0x0406: "client-error-not-found",
+    0x0408: "client-error-request-entity-too-large",
+    0x0409: "client-error-request-value-too-long",
+    0x040A: "client-error-document-format-not-supported",
+    0x040B: "client-error-attributes-or-values-not-supported",
+    0x040C: "client-error-uri-scheme-not-supported",
+    0x0412: "client-error-not-accepting-jobs",
+    0x0500: "server-error-internal-error",
+    0x0503: "server-error-service-unavailable",
+    0x0504: "server-error-version-not-supported",
+    0x0505: "server-error-device-error",
+}
+
 
 def _encode_attr(tag: int, name: str, value: str) -> bytes:
     """Encode one IPP attribute: tag(1B) + name-len(2B) + name + value-len(2B) + value."""
@@ -115,6 +136,32 @@ def build_ipp_packet(
     header += _GROUP_END
 
     return header + pdf_data
+
+
+def parse_ipp_response_status(response: bytes) -> tuple[int | None, str]:
+    """Return ``(status_code, description)`` from a binary IPP response.
+
+    IPP is transported over HTTP, but the operation result lives in the IPP
+    response body. HTTP 200 can still carry an IPP client/server error.
+    """
+    if len(response) < 4:
+        return None, "Invalid IPP response: shorter than 4 bytes"
+
+    major, minor = response[0], response[1]
+    if major not in (1, 2):
+        return None, f"Invalid IPP response version: {major}.{minor}"
+
+    status_code = struct.unpack(">H", response[2:4])[0]
+    name = _IPP_STATUS_NAMES.get(status_code, "unknown-status")
+    return status_code, f"IPP 0x{status_code:04x} {name}"
+
+
+def ipp_response_succeeded(response: bytes) -> tuple[bool, str]:
+    """Return whether an IPP response body represents a successful operation."""
+    status_code, description = parse_ipp_response_status(response)
+    if status_code is None:
+        return False, description
+    return status_code < 0x0100, description
 
 
 def determine_sides(duplex_mode: str, is_booklet: bool) -> str:
