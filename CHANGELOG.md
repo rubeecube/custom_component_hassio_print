@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.14] — 2026-04-28
+
+### Fixed
+
+- **Home Assistant brand icon set** — rebuilt integration icons as square transparent PNGs that match Home Assistant brand image requirements.
+- **High-DPI brand assets** — added `@2x` icon and logo variants so Home Assistant can use crisp assets on high-density displays.
+- **README artwork** — removed the baked checkerboard background from `hacs.png`.
+
+### Changed
+
+- Bumped package metadata to `0.1.14`.
+
+---
+
 ## [0.1.13] — 2026-04-28
 
 ### Added
@@ -150,6 +164,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.1.14]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.14
 [0.1.13]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.13
 [0.1.12]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.12
 [0.1.11]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.11

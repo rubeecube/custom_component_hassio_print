@@ -88,8 +88,42 @@ def test_brand_assets_are_packaged() -> None:
     from pathlib import Path
 
     brand_dir = Path(__file__).parents[2] / "custom_components" / "print_bridge" / "brand"
-    for filename in ("icon.png", "logo.png", "dark_icon.png", "dark_logo.png"):
+    for filename in (
+        "icon.png",
+        "icon@2x.png",
+        "logo.png",
+        "logo@2x.png",
+        "dark_icon.png",
+        "dark_icon@2x.png",
+        "dark_logo.png",
+        "dark_logo@2x.png",
+    ):
         assert (brand_dir / filename).is_file()
+
+
+def test_brand_assets_match_home_assistant_dimensions() -> None:
+    """Brand icon files must stay square per Home Assistant's image spec."""
+    from pathlib import Path
+
+    from PIL import Image
+
+    brand_dir = Path(__file__).parents[2] / "custom_components" / "print_bridge" / "brand"
+    expected_sizes = {
+        "icon.png": (256, 256),
+        "dark_icon.png": (256, 256),
+        "icon@2x.png": (512, 512),
+        "dark_icon@2x.png": (512, 512),
+        "logo.png": (512, 256),
+        "dark_logo.png": (512, 256),
+        "logo@2x.png": (1024, 512),
+        "dark_logo@2x.png": (1024, 512),
+    }
+
+    for filename, expected_size in expected_sizes.items():
+        with Image.open(brand_dir / filename) as image:
+            assert image.size == expected_size
+            assert image.mode == "RGBA"
+            assert image.getpixel((0, 0))[3] == 0
 
 
 async def test_imap_content_listener_registered(
