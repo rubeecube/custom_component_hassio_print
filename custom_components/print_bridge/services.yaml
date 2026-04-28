@@ -151,6 +151,13 @@ check_filter:
       selector:
         text:
 
+check_printer_capabilities:
+  name: Check Printer Capabilities
+  description: >-
+    Query the selected target printer with IPP Get-Printer-Attributes and show
+    the document formats it accepts.  The same capability data is used to choose
+    whether Print Bridge sends PDF directly or converts PDF to PWG Raster.
+
 process_imap_part:
   name: Process IMAP Email Part
   description: >-

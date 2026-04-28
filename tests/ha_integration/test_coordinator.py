@@ -25,7 +25,7 @@ from homeassistant.core import Event, HomeAssistant, ServiceCall, SupportsRespon
 from homeassistant.exceptions import HomeAssistantError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.print_bridge.const import DOMAIN
+from custom_components.print_bridge.const import CONF_DIRECT_PRINTER_URL, DOMAIN
 from custom_components.print_bridge.coordinator import (
     AutoPrintCoordinator,
     AutoPrintData,
@@ -87,6 +87,46 @@ def _pdf_parts(filename: str = "document.pdf") -> dict:
 
 def _ipp_response(status_code: int = 0x0000) -> bytes:
     return struct.pack(">HHI", 0x0200, status_code, 1) + b"\x03"
+
+
+def _ipp_attr(tag: int, name: str, value: bytes) -> bytes:
+    name_b = name.encode()
+    return (
+        struct.pack(">BH", tag, len(name_b))
+        + name_b
+        + struct.pack(">H", len(value))
+        + value
+    )
+
+
+def _ipp_more_attr(tag: int, value: bytes) -> bytes:
+    return struct.pack(">BH", tag, 0) + struct.pack(">H", len(value)) + value
+
+
+def _printer_attributes_response(
+    formats: tuple[str, ...] = ("application/pdf",),
+    raster_types: tuple[str, ...] = (),
+) -> bytes:
+    body = struct.pack(">HHI", 0x0200, 0x0000, 1) + b"\x04"
+    for index, value in enumerate(formats):
+        if index == 0:
+            body += _ipp_attr(0x49, "document-format-supported", value.encode())
+        else:
+            body += _ipp_more_attr(0x49, value.encode())
+    for index, value in enumerate(raster_types):
+        if index == 0:
+            body += _ipp_attr(
+                0x44, "pwg-raster-document-type-supported", value.encode()
+            )
+        else:
+            body += _ipp_more_attr(0x44, value.encode())
+    body += _ipp_attr(
+        0x32,
+        "pwg-raster-document-resolution-supported",
+        struct.pack(">IIB", 300, 300, 3),
+    )
+    body += _ipp_attr(0x44, "pwg-raster-document-sheet-back", b"rotated")
+    return body + b"\x03"
 
 
 async def _start_fake_ipp_server(status_code: int = 0x0000):
@@ -594,6 +634,122 @@ async def test_send_print_job_rejects_ipp_error_body(hass: HomeAssistant) -> Non
 
     assert result.success is False
     assert "document-format-not-supported" in result.error
+
+
+async def test_check_printer_capabilities_reads_supported_formats(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(
+        hass,
+        data={CONF_DIRECT_PRINTER_URL: "http://printer.local:631/ipp/print"},
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+    mock_resp.read = AsyncMock(
+        return_value=_printer_attributes_response(
+            formats=("application/octet-stream", "image/pwg-raster"),
+            raster_types=("srgb_8",),
+        )
+    )
+    mock_session = MagicMock()
+    mock_session.post.return_value = mock_resp
+
+    with patch(
+        "custom_components.print_bridge.coordinator.async_get_clientsession",
+        return_value=mock_session,
+    ):
+        capabilities = await coordinator.async_check_printer_capabilities()
+
+    assert capabilities.document_formats == [
+        "application/octet-stream",
+        "image/pwg-raster",
+    ]
+    assert capabilities.selected_document_format == "image/pwg-raster"
+    assert capabilities.conversion_required is True
+    assert coordinator.data.printer_capabilities is capabilities
+
+
+async def test_check_cups_capabilities_prefers_pdf(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(hass)
+
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+    mock_resp.read = AsyncMock(
+        return_value=_printer_attributes_response(
+            formats=("application/octet-stream", "application/pdf", "image/pwg-raster"),
+            raster_types=("srgb_8",),
+        )
+    )
+    mock_session = MagicMock()
+    mock_session.post.return_value = mock_resp
+
+    with patch(
+        "custom_components.print_bridge.coordinator.async_get_clientsession",
+        return_value=mock_session,
+    ):
+        capabilities = await coordinator.async_check_printer_capabilities()
+
+    assert capabilities.endpoint == "http://cups.local:631/printers/TestPrinter"
+    assert capabilities.printer_uri == "ipp://cups.local:631/printers/TestPrinter"
+    assert capabilities.pdf_supported is True
+    assert capabilities.selected_document_format == "application/pdf"
+    assert capabilities.conversion_required is False
+
+
+async def test_direct_printer_converts_pdf_to_pwg_when_pdf_not_supported(
+    hass: HomeAssistant,
+) -> None:
+    _, coordinator = await _setup_coordinator(
+        hass,
+        data={CONF_DIRECT_PRINTER_URL: "http://printer.local:631/ipp/print"},
+    )
+
+    caps_resp = MagicMock()
+    caps_resp.status = 200
+    caps_resp.__aenter__ = AsyncMock(return_value=caps_resp)
+    caps_resp.__aexit__ = AsyncMock(return_value=False)
+    caps_resp.read = AsyncMock(
+        return_value=_printer_attributes_response(
+            formats=("application/octet-stream", "image/pwg-raster"),
+            raster_types=("srgb_8",),
+        )
+    )
+    print_resp = MagicMock()
+    print_resp.status = 200
+    print_resp.__aenter__ = AsyncMock(return_value=print_resp)
+    print_resp.__aexit__ = AsyncMock(return_value=False)
+    print_resp.read = AsyncMock(return_value=_ipp_response())
+
+    mock_session = MagicMock()
+    mock_session.post.side_effect = [caps_resp, print_resp]
+
+    with (
+        patch(
+            "custom_components.print_bridge.coordinator.async_get_clientsession",
+            return_value=mock_session,
+        ),
+        patch(
+            "custom_components.print_bridge.coordinator.convert_pdf_to_pwg_raster",
+            return_value=b"PWG",
+        ) as mock_convert,
+    ):
+        result = await coordinator.async_send_print_job(
+            "doc.pdf", _FAKE_PDF, "one-sided", False
+        )
+
+    assert result.success is True
+    mock_convert.assert_called_once()
+    print_body = mock_session.post.call_args_list[1].kwargs["data"]
+    assert b"document-format" in print_body
+    assert b"image/pwg-raster" in print_body
+    assert print_body.endswith(b"PWG")
 
 
 async def test_imap_event_posts_pdf_to_fake_ipp_printer(

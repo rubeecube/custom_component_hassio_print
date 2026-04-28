@@ -22,6 +22,7 @@ from .const import (
     SENSOR_JOB_LOG,
     SENSOR_LAST_JOB,
     SENSOR_PENDING_JOBS,
+    SENSOR_PRINTER_CAPABILITIES,
     SENSOR_QUEUE_DEPTH,
 )
 from .coordinator import AutoPrintCoordinator, AutoPrintData
@@ -41,6 +42,7 @@ async def async_setup_entry(
             LastJobSensor(coordinator, entry),
             JobLogSensor(coordinator, entry),
             FilterPreviewSensor(coordinator, entry),
+            PrinterCapabilitiesSensor(coordinator, entry),
             PendingJobsSensor(coordinator, entry),
         ]
     )
@@ -204,6 +206,36 @@ class FilterPreviewSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity)
             "with_pdf": preview.with_pdf,
             "emails": [e.as_dict() for e in preview.emails],
         }
+
+
+class PrinterCapabilitiesSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
+    """Shows the printer's advertised IPP document-format support."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = SENSOR_PRINTER_CAPABILITIES
+    _attr_icon = "mdi:printer-search"
+
+    def __init__(self, coordinator: AutoPrintCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_{SENSOR_PRINTER_CAPABILITIES}"
+        self._attr_device_info = _device_info(entry)
+
+    @property
+    def native_value(self) -> str | None:
+        data = self.coordinator.data
+        if data is None or data.printer_capabilities is None:
+            return None
+        capabilities = data.printer_capabilities
+        if capabilities.error:
+            return "error"
+        return capabilities.selected_document_format
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        data = self.coordinator.data
+        if data is None or data.printer_capabilities is None:
+            return {"checked_at": None, "document_formats": []}
+        return data.printer_capabilities.as_dict()
 
 
 class PendingJobsSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):

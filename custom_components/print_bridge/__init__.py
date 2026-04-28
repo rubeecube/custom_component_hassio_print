@@ -30,6 +30,7 @@ from .const import (
     FIELD_FILE_PATH,
     CONF_AUTO_PRINT_ENABLED,
     SERVICE_CHECK_FILTER,
+    SERVICE_CHECK_PRINTER_CAPABILITIES,
     SERVICE_CLEAR_QUEUE,
     SERVICE_PRINT_EMAIL,
     SERVICE_PRINT_FILE,
@@ -212,6 +213,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: AutoPrintConfigEntry) -
             for svc in (
                 SERVICE_PRINT_FILE, SERVICE_CLEAR_QUEUE,
                 SERVICE_PROCESS_IMAP_PART, SERVICE_CHECK_FILTER,
+                SERVICE_CHECK_PRINTER_CAPABILITIES,
                 SERVICE_RETRY_JOB, SERVICE_PRINT_EMAIL,
             ):
                 hass.services.async_remove(DOMAIN, svc)
@@ -295,6 +297,19 @@ def _register_services(hass: HomeAssistant) -> None:
         schema=vol.Schema(
             {vol.Optional("imap_entry_id"): cv.string}
         ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    async def _handle_check_printer_capabilities(call: ServiceCall) -> dict:
+        """Query the selected target printer's IPP capabilities."""
+        coordinator = _get_any_coordinator(hass).selected_printer_coordinator
+        result = await coordinator.async_check_printer_capabilities(force=True)
+        return result.as_dict()
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CHECK_PRINTER_CAPABILITIES,
+        _handle_check_printer_capabilities,
         supports_response=SupportsResponse.OPTIONAL,
     )
 

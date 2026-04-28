@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from email.utils import parseaddr
+from functools import partial
 from typing import Any
 
 import aiohttp
@@ -73,16 +74,20 @@ from .const import (
 from .imap_checker import EmailPreview, preview_mailbox
 from .print_handler import (
     build_ipp_packet,
+    build_get_printer_attributes_packet,
     cups_printer_uri,
     determine_sides,
     http_url_to_ipp_uri,
     ipp_response_succeeded,
     is_booklet_job,
+    parse_ipp_attributes,
 )
+from .raster_converter import convert_pdf_to_jpeg, convert_pdf_to_pwg_raster
 
 logger = logging.getLogger(__name__)
 
 _STATUS_INTERVAL = timedelta(minutes=5)
+_CAPABILITIES_TTL = timedelta(hours=1)
 _SCHEDULE_DAY_ALIASES = {
     "mon": "mon",
     "monday": "mon",
@@ -177,6 +182,18 @@ def _template_result_is_truthy(value: Any) -> bool:
     return bool(value)
 
 
+def _first_or_none(values: list[str]) -> str | None:
+    return values[0] if values else None
+
+
+def _resolution_dpi(values: list[str]) -> int:
+    for value in values:
+        match = re.match(r"^(\d+)(?:x\d+)?dpi$", value)
+        if match:
+            return int(match.group(1))
+    return 300
+
+
 @dataclass
 class PrintJobResult:
     """Outcome of a single print attempt, including audit metadata."""
@@ -215,6 +232,52 @@ class FilterPreviewResult:
 
 
 @dataclass
+class PrinterCapabilities:
+    """IPP capability snapshot for the configured printer endpoint."""
+
+    checked_at: str
+    endpoint: str
+    printer_uri: str
+    document_formats: list[str] = field(default_factory=list)
+    document_format_default: str | None = None
+    pdf_versions: list[str] = field(default_factory=list)
+    pwg_raster_types: list[str] = field(default_factory=list)
+    pwg_raster_resolutions: list[str] = field(default_factory=list)
+    pwg_sheet_back: str | None = None
+    sides_supported: list[str] = field(default_factory=list)
+    selected_document_format: str | None = None
+    conversion_required: bool = False
+    error: str | None = None
+
+    @property
+    def pdf_supported(self) -> bool:
+        return "application/pdf" in self.document_formats
+
+    @property
+    def pwg_supported(self) -> bool:
+        return "image/pwg-raster" in self.document_formats
+
+    def as_dict(self) -> dict:
+        return {
+            "checked_at": self.checked_at,
+            "endpoint": self.endpoint,
+            "printer_uri": self.printer_uri,
+            "document_formats": list(self.document_formats),
+            "document_format_default": self.document_format_default,
+            "pdf_versions": list(self.pdf_versions),
+            "pwg_raster_types": list(self.pwg_raster_types),
+            "pwg_raster_resolutions": list(self.pwg_raster_resolutions),
+            "pwg_sheet_back": self.pwg_sheet_back,
+            "sides_supported": list(self.sides_supported),
+            "selected_document_format": self.selected_document_format,
+            "conversion_required": self.conversion_required,
+            "pdf_supported": self.pdf_supported,
+            "pwg_supported": self.pwg_supported,
+            "error": self.error,
+        }
+
+
+@dataclass
 class PendingJob:
     """A print job held in the schedule queue (outside allowed print hours)."""
 
@@ -248,6 +311,7 @@ class AutoPrintData:
     job_history: list[PrintJobResult] = field(default_factory=list)
     total_jobs_sent: int = 0
     filter_preview: FilterPreviewResult | None = None
+    printer_capabilities: PrinterCapabilities | None = None
     pending_jobs: list[PendingJob] = field(default_factory=list)
 
 
@@ -265,6 +329,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         self._job_history: list[PrintJobResult] = []
         self._total_jobs_sent: int = 0
         self._filter_preview: FilterPreviewResult | None = None
+        self._printer_capabilities: PrinterCapabilities | None = None
+        self._capabilities_checked_at: datetime | None = None
         self._pending_jobs: list[PendingJob] = []
         self._last_schedule_state: bool | None = None  # track open↔closed transitions
         # Deduplication: maps "uid:part_key" → datetime of last print to prevent
@@ -1101,6 +1167,90 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         await self.async_request_refresh()
         return deleted
 
+    async def async_check_printer_capabilities(
+        self, *, force: bool = True
+    ) -> PrinterCapabilities:
+        """Query the printer's IPP document-format support and cache it."""
+        if (
+            not force
+            and self._printer_capabilities is not None
+            and self._capabilities_checked_at is not None
+            and datetime.now() - self._capabilities_checked_at < _CAPABILITIES_TTL
+        ):
+            return self._printer_capabilities
+
+        checked_at_dt = datetime.now()
+        checked_at = checked_at_dt.isoformat(timespec="seconds")
+        packet = build_get_printer_attributes_packet(self._printer_uri)
+        session = async_get_clientsession(self.hass)
+
+        try:
+            async with session.post(
+                self._ipp_endpoint,
+                data=packet,
+                headers={"Content-Type": "application/ipp"},
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                body = await resp.read()
+                if resp.status != 200:
+                    raise RuntimeError(f"HTTP {resp.status}")
+                ipp_ok, ipp_status = ipp_response_succeeded(body)
+                if not ipp_ok:
+                    raise RuntimeError(ipp_status)
+                attrs = parse_ipp_attributes(body)
+        except Exception as exc:
+            capabilities = PrinterCapabilities(
+                checked_at=checked_at,
+                endpoint=self._ipp_endpoint,
+                printer_uri=self._printer_uri,
+                selected_document_format="application/pdf",
+                error=str(exc),
+            )
+        else:
+            document_formats = attrs.get("document-format-supported", [])
+            selected_format, conversion_required = self._select_document_format(
+                document_formats
+            )
+            capabilities = PrinterCapabilities(
+                checked_at=checked_at,
+                endpoint=self._ipp_endpoint,
+                printer_uri=self._printer_uri,
+                document_formats=document_formats,
+                document_format_default=_first_or_none(
+                    attrs.get("document-format-default", [])
+                ),
+                pdf_versions=attrs.get("pdf-versions-supported", []),
+                pwg_raster_types=attrs.get(
+                    "pwg-raster-document-type-supported", []
+                ),
+                pwg_raster_resolutions=attrs.get(
+                    "pwg-raster-document-resolution-supported", []
+                ),
+                pwg_sheet_back=_first_or_none(
+                    attrs.get("pwg-raster-document-sheet-back", [])
+                ),
+                sides_supported=attrs.get("sides-supported", []),
+                selected_document_format=selected_format,
+                conversion_required=conversion_required,
+            )
+
+        self._printer_capabilities = capabilities
+        self._capabilities_checked_at = checked_at_dt
+        if self.data is not None:
+            self.async_set_updated_data(
+                AutoPrintData(
+                    queue_depth=self.data.queue_depth,
+                    printer_online=self.data.printer_online,
+                    last_job=self.data.last_job,
+                    job_history=list(self.data.job_history),
+                    total_jobs_sent=self.data.total_jobs_sent,
+                    filter_preview=self.data.filter_preview,
+                    printer_capabilities=capabilities,
+                    pending_jobs=list(self.data.pending_jobs),
+                )
+            )
+        return capabilities
+
     async def async_send_print_job(
         self, filename: str, pdf_data: bytes, duplex_mode: str, booklet: bool
     ) -> PrintJobResult:
@@ -1118,7 +1268,24 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 )
 
         sides = determine_sides(duplex_mode, booklet)
-        packet = build_ipp_packet(self._printer_uri, filename, sides, pdf_data)
+        try:
+            document_format, document_data = await self._async_prepare_document_for_printing(
+                pdf_data, sides
+            )
+        except Exception as exc:
+            logger.error("Document conversion failed for '%s': %s", filename, exc)
+            return PrintJobResult(
+                filename=filename, success=False, error=str(exc),
+                duplex=duplex_mode, booklet=booklet,
+            )
+
+        packet = build_ipp_packet(
+            self._printer_uri,
+            filename,
+            sides,
+            document_data,
+            document_format=document_format,
+        )
 
         session = async_get_clientsession(self.hass)
         try:
@@ -1149,8 +1316,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 ipp_ok, ipp_status = ipp_response_succeeded(body)
                 if ipp_ok:
                     logger.debug(
-                        "Print job accepted for '%s' (sides=%s, %s)",
-                        filename, sides, ipp_status,
+                        "Print job accepted for '%s' (format=%s, sides=%s, %s)",
+                        filename, document_format, sides, ipp_status,
                     )
                     return PrintJobResult(
                         filename=filename, success=True,
@@ -1170,6 +1337,55 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 filename=filename, success=False, error=str(exc),
                 duplex=duplex_mode, booklet=booklet,
             )
+
+    def _select_document_format(self, document_formats: list[str]) -> tuple[str, bool]:
+        """Choose the document format Print Bridge should send."""
+        if "application/pdf" in document_formats or not self._is_direct_mode:
+            return "application/pdf", False
+        if "image/pwg-raster" in document_formats:
+            return "image/pwg-raster", True
+        if "image/jpeg" in document_formats:
+            return "image/jpeg", True
+        return "application/pdf", False
+
+    async def _async_prepare_document_for_printing(
+        self, pdf_data: bytes, sides: str
+    ) -> tuple[str, bytes]:
+        """Return document-format and payload bytes accepted by this printer."""
+        if not self._is_direct_mode:
+            return "application/pdf", pdf_data
+
+        capabilities = await self.async_check_printer_capabilities(force=False)
+        document_format = capabilities.selected_document_format or "application/pdf"
+        if document_format == "application/pdf":
+            return document_format, pdf_data
+        if document_format == "image/pwg-raster":
+            color_type = (
+                "srgb_8"
+                if "srgb_8" in capabilities.pwg_raster_types
+                else "sgray_8"
+            )
+            dpi = _resolution_dpi(capabilities.pwg_raster_resolutions)
+            raster_data = await self.hass.async_add_executor_job(
+                partial(
+                    convert_pdf_to_pwg_raster,
+                    pdf_data,
+                    sides,
+                    dpi=dpi,
+                    color_type=color_type,
+                    sheet_back=capabilities.pwg_sheet_back,
+                )
+            )
+            return document_format, raster_data
+        if document_format == "image/jpeg":
+            jpeg_data = await self.hass.async_add_executor_job(
+                partial(convert_pdf_to_jpeg, pdf_data)
+            )
+            return document_format, jpeg_data
+        raise ValueError(
+            "Printer does not support PDF or a built-in convertible format "
+            f"(supported: {', '.join(capabilities.document_formats) or 'unknown'})"
+        )
 
     # ------------------------------------------------------------------
     # Coordinator periodic update (printer status only)
@@ -1230,6 +1446,7 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
             job_history=list(self._job_history),
             total_jobs_sent=self._total_jobs_sent,
             filter_preview=self._filter_preview,
+            printer_capabilities=self._printer_capabilities,
             pending_jobs=list(self._pending_jobs),
         )
 

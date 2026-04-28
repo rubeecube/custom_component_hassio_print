@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     BUTTON_CHECK_FILTER,
+    BUTTON_CHECK_PRINTER_CAPABILITIES,
     BUTTON_FLUSH_PENDING,
     BUTTON_PRINT_EMAIL_PREFIX,
     BUTTON_PRINT_EMAIL_SLOTS,
@@ -61,6 +62,7 @@ async def async_setup_entry(
         [
             TestPageButton(coordinator, entry),
             CheckFilterButton(coordinator, entry),
+            CheckPrinterCapabilitiesButton(coordinator, entry),
             RetryLastFailedButton(coordinator, entry),
             FlushPendingButton(coordinator, entry),
             *[
@@ -111,6 +113,26 @@ class CheckFilterButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):
     async def async_press(self) -> None:
         """Run filter preview and update sensor.auto_print_*_filter_preview."""
         await self.coordinator.async_check_filter()
+
+
+class CheckPrinterCapabilitiesButton(
+    CoordinatorEntity[AutoPrintCoordinator], ButtonEntity
+):
+    """Query the selected printer's IPP document-format support."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = BUTTON_CHECK_PRINTER_CAPABILITIES
+    _attr_icon = "mdi:printer-search"
+
+    def __init__(self, coordinator: AutoPrintCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_{BUTTON_CHECK_PRINTER_CAPABILITIES}"
+        self._attr_device_info = _device_info(entry)
+
+    async def async_press(self) -> None:
+        """Refresh printer capabilities for the selected target printer."""
+        target = self.coordinator.selected_printer_coordinator
+        await target.async_check_printer_capabilities(force=True)
 
 
 class RetryLastFailedButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):

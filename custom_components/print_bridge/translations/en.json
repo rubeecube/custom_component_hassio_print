@@ -91,6 +91,7 @@
       "last_job":       { "name": "Last Print Job" },
       "job_log":        { "name": "Job Log" },
       "filter_preview": { "name": "Filter Preview" },
+      "printer_capabilities": { "name": "Printer Capabilities" },
       "pending_jobs":   { "name": "Scheduled Queue" }
     },
     "binary_sensor": {
@@ -123,6 +124,7 @@
     "button": {
       "test_page":          { "name": "Print Test Page" },
       "check_filter":       { "name": "Check Filter" },
+      "check_printer_capabilities": { "name": "Check Printer Capabilities" },
       "retry_last_failed":  { "name": "Retry Last Failed Job" },
       "flush_pending":      { "name": "Print Queued Jobs Now" }
     }

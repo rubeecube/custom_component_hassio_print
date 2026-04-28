@@ -8,7 +8,7 @@ build-backend = "setuptools.backends.legacy:build"
 
 [project]
 name = "print-bridge"
-version = "0.1.12"
+version = "0.1.13"
 description = "Print Bridge: Home Assistant custom component to automatically print PDF email attachments via IMAP events, with direct IPP/AirPrint and CUPS support, booklet printing, schedule, audit log, and retry."
 readme = "README.md"
 license = { text = "MIT" }
@@ -36,6 +36,7 @@ classifiers = [
 # Runtime dependency (installed by HA from manifest.json requirements[])
 dependencies = [
     "pypdf>=4.0.0",
+    "pypdfium2>=4.30.0",
 ]
 
 [project.urls]
@@ -53,6 +54,7 @@ dev = [
     "pytest>=8.0",
     "pytest-homeassistant-custom-component>=0.13",
     "pypdf>=4.0.0",
+    "pypdfium2>=4.30.0",
     "pyyaml>=6.0",
     "requests>=2.31",
 ]

@@ -6,5 +6,6 @@ pytest>=8.0
 
 # Runtime dependencies required by the component and legacy scripts
 pypdf>=4.0.0
+pypdfium2>=4.30.0
 pyyaml>=6.0
 requests>=2.31

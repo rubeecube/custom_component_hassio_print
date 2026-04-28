@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.13] — 2026-04-28
+
+### Added
+
+- **Printer capability check** — added a service, button, and sensor that query the configured IPP endpoint for supported document formats, duplex modes, and raster capabilities.
+
+### Fixed
+
+- **Direct IPP printers without PDF support** — direct printer jobs now select a printer-supported document format and convert PDFs to PWG Raster when the printer rejects `application/pdf`.
+- **CUPS compatibility** — CUPS queues still expose capability checks while keeping PDF as the print format so CUPS can handle printer-specific conversion.
+
+### Changed
+
+- Bumped package metadata to `0.1.13`.
+
+---
+
 ## [0.1.12] — 2026-04-26
 
 ### Fixed
@@ -133,6 +150,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.1.13]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.13
+[0.1.12]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.12
+[0.1.11]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.11
 [0.1.10]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.10
 [0.1.3]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.3
 [0.1.2]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.2

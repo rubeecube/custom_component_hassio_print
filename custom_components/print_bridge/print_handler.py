@@ -104,8 +104,25 @@ def cups_printer_uri(cups_base_url: str, queue_name: str) -> str:
     return f"{ipp_base}/printers/{queue_name}"
 
 
+_REQUESTED_CAPABILITY_ATTRIBUTES = (
+    "document-format-supported",
+    "document-format-default",
+    "pdf-versions-supported",
+    "pwg-raster-document-type-supported",
+    "pwg-raster-document-resolution-supported",
+    "pwg-raster-document-sheet-back",
+    "sides-supported",
+    "printer-make-and-model",
+    "printer-name",
+)
+
+
 def build_ipp_packet(
-    printer_uri: str, file_name: str, sides: str, pdf_data: bytes
+    printer_uri: str,
+    file_name: str,
+    sides: str,
+    document_data: bytes,
+    document_format: str = "application/pdf",
 ) -> bytes:
     """Construct a valid IPP 2.0 Print-Job request packet.
 
@@ -115,7 +132,8 @@ def build_ipp_packet(
                       or ``ipp://printer.local/ipp/print``.
         file_name:    Display name for the job (the PDF's filename).
         sides:        IPP sides keyword, e.g. "two-sided-long-edge".
-        pdf_data:     Raw bytes of the PDF file (appended after the IPP header).
+        document_data: Raw bytes of the document file appended after the IPP header.
+        document_format: IPP document-format value for the appended bytes.
 
     Returns:
         Complete IPP request bytes ready to POST to the printer/CUPS endpoint.
@@ -128,14 +146,100 @@ def build_ipp_packet(
     header += _encode_attr(_TAG_NAT_LANG, "attributes-natural-language", "en")
     header += _encode_attr(_TAG_URI, "printer-uri", printer_uri)
     header += _encode_attr(_TAG_NAME, "job-name", file_name)
-    header += _encode_attr(_TAG_MIME, "document-format", "application/pdf")
+    header += _encode_attr(_TAG_MIME, "document-format", document_format)
 
     header += _GROUP_JOB
     header += _encode_attr(_TAG_KEYWORD, "sides", sides)
 
     header += _GROUP_END
 
-    return header + pdf_data
+    return header + document_data
+
+
+def build_get_printer_attributes_packet(
+    printer_uri: str,
+    requested_attributes: tuple[str, ...] = _REQUESTED_CAPABILITY_ATTRIBUTES,
+) -> bytes:
+    """Construct an IPP Get-Printer-Attributes request."""
+    header = struct.pack(">HHI", 0x0200, 0x000B, 0x00000001)
+    header += _GROUP_OPERATION
+    header += _encode_attr(_TAG_CHARSET, "attributes-charset", "utf-8")
+    header += _encode_attr(_TAG_NAT_LANG, "attributes-natural-language", "en")
+    header += _encode_attr(_TAG_URI, "printer-uri", printer_uri)
+    for index, attr in enumerate(requested_attributes):
+        name = "requested-attributes" if index == 0 else ""
+        header += _encode_attr(_TAG_KEYWORD, name, attr)
+    header += _GROUP_END
+    return header
+
+
+def parse_ipp_attributes(response: bytes) -> dict[str, list[str]]:
+    """Parse simple string-like attributes from an IPP response body.
+
+    This intentionally handles only the IPP value types Print Bridge needs for
+    capability display and format selection.
+    """
+    attrs: dict[str, list[str]] = {}
+    if len(response) < 9:
+        return attrs
+
+    offset = 8
+    current_name: str | None = None
+    string_tags = {
+        _TAG_CHARSET,
+        _TAG_NAT_LANG,
+        _TAG_URI,
+        _TAG_NAME,
+        _TAG_MIME,
+        _TAG_KEYWORD,
+        0x41,  # textWithoutLanguage
+    }
+
+    while offset < len(response):
+        tag = response[offset]
+        offset += 1
+        if tag == _GROUP_END[0]:
+            break
+        if tag in (0x01, 0x02, 0x04, 0x05):
+            current_name = None
+            continue
+        if offset + 2 > len(response):
+            break
+
+        name_len = struct.unpack(">H", response[offset:offset + 2])[0]
+        offset += 2
+        if offset + name_len > len(response):
+            break
+        name_bytes = response[offset:offset + name_len]
+        offset += name_len
+        if name_len:
+            current_name = name_bytes.decode("utf-8", errors="replace")
+        if offset + 2 > len(response):
+            break
+
+        value_len = struct.unpack(">H", response[offset:offset + 2])[0]
+        offset += 2
+        if offset + value_len > len(response):
+            break
+        value = response[offset:offset + value_len]
+        offset += value_len
+
+        if not current_name:
+            continue
+        if tag in string_tags:
+            attrs.setdefault(current_name, []).append(
+                value.decode("utf-8", errors="replace")
+            )
+        elif tag == 0x32 and value_len == 9:  # resolution
+            xres, yres, units = struct.unpack(">IIB", value)
+            suffix = "dpi" if units == 3 else "dpcm"
+            if xres == yres:
+                rendered = f"{xres}{suffix}"
+            else:
+                rendered = f"{xres}x{yres}{suffix}"
+            attrs.setdefault(current_name, []).append(rendered)
+
+    return attrs
 
 
 def parse_ipp_response_status(response: bytes) -> tuple[int | None, str]:

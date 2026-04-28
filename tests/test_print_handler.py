@@ -11,10 +11,12 @@ import struct
 import pytest
 
 from print_handler import (
+    build_get_printer_attributes_packet,
     build_ipp_packet,
     determine_sides,
     ipp_response_succeeded,
     is_booklet_job,
+    parse_ipp_attributes,
     parse_ipp_response_status,
 )
 
@@ -53,6 +55,19 @@ def test_ipp_packet_contains_document_format():
     pkt = build_ipp_packet(PRINTER, "test.pdf", "one-sided", PDF_STUB)
     assert b"document-format" in pkt
     assert b"application/pdf" in pkt
+
+
+def test_ipp_packet_can_use_non_pdf_document_format():
+    pkt = build_ipp_packet(
+        PRINTER,
+        "test.pdf",
+        "one-sided",
+        b"raster",
+        document_format="image/pwg-raster",
+    )
+    assert b"document-format" in pkt
+    assert b"image/pwg-raster" in pkt
+    assert pkt.endswith(b"raster")
 
 
 def test_ipp_packet_contains_sides_attribute():
@@ -107,6 +122,54 @@ def test_parse_html_response_is_not_ipp_success():
 
     assert ok is False
     assert "Invalid IPP response version" in description
+
+
+def test_get_printer_attributes_packet_uses_operation_id():
+    pkt = build_get_printer_attributes_packet("ipp://printer.local/ipp/print")
+    op_id = struct.unpack(">H", pkt[2:4])[0]
+    assert op_id == 0x000B
+    assert b"Get-Printer-Attributes" not in pkt
+    assert b"document-format-supported" in pkt
+    assert b"pwg-raster-document-type-supported" in pkt
+
+
+def _ipp_attr(tag: int, name: str, value: bytes) -> bytes:
+    name_b = name.encode()
+    return (
+        struct.pack(">BH", tag, len(name_b))
+        + name_b
+        + struct.pack(">H", len(value))
+        + value
+    )
+
+
+def _ipp_more_attr(tag: int, value: bytes) -> bytes:
+    return struct.pack(">BH", tag, 0) + struct.pack(">H", len(value)) + value
+
+
+def test_parse_ipp_attributes_repeated_values_and_resolution():
+    body = (
+        struct.pack(">HHI", 0x0200, 0x0000, 1)
+        + b"\x04"
+        + _ipp_attr(0x49, "document-format-supported", b"application/octet-stream")
+        + _ipp_more_attr(0x49, b"image/pwg-raster")
+        + _ipp_attr(0x44, "pwg-raster-document-type-supported", b"srgb_8")
+        + _ipp_attr(
+            0x32,
+            "pwg-raster-document-resolution-supported",
+            struct.pack(">IIB", 600, 600, 3),
+        )
+        + b"\x03"
+    )
+
+    attrs = parse_ipp_attributes(body)
+
+    assert attrs["document-format-supported"] == [
+        "application/octet-stream",
+        "image/pwg-raster",
+    ]
+    assert attrs["pwg-raster-document-type-supported"] == ["srgb_8"]
+    assert attrs["pwg-raster-document-resolution-supported"] == ["600dpi"]
 
 
 # ── determine_sides ───────────────────────────────────────────────────────────
