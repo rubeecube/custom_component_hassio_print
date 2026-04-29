@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.15] — 2026-04-29
+
+### Fixed
+
+- **Encoded Hebrew attachment names** — decoded and cleaned RFC 2047 filenames that contain repeated invisible RTL direction marks before logging, service errors, or IPP job submission.
+- **IPP job-name safety** — stripped control/format characters and capped IPP job names to 255 UTF-8 bytes to avoid printer-side stalls or rejects.
+- **Blank network errors** — timeout and network failures now include the exception type, IPP endpoint, and timeout value instead of an empty error string.
+
+### Changed
+
+- Increased print-job POST timeout to 300 seconds for large converted/rasterized PDFs.
+- Bumped package metadata to `0.1.15`.
+
+---
+
 ## [0.1.14] — 2026-04-28
 
 ### Fixed
@@ -164,6 +179,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.1.15]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.15
 [0.1.14]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.14
 [0.1.13]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.13
 [0.1.12]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.12

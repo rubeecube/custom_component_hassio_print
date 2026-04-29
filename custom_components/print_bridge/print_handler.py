@@ -16,7 +16,9 @@ Two printing modes are supported:
 from __future__ import annotations
 
 import logging
+import os
 import struct
+import unicodedata
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,47 @@ _IPP_STATUS_NAMES = {
     0x0504: "server-error-version-not-supported",
     0x0505: "server-error-device-error",
 }
+
+
+def _truncate_utf8(value: str, max_bytes: int) -> str:
+    """Truncate a string to a UTF-8 byte budget, preserving whole characters."""
+    if len(value.encode("utf-8")) <= max_bytes:
+        return value
+
+    stem, extension = os.path.splitext(value)
+    extension_bytes = extension.encode("utf-8")
+    suffix = extension if len(extension_bytes) < max_bytes - 16 else ""
+    budget = max_bytes - len(suffix.encode("utf-8"))
+    truncated = ""
+    used = 0
+    for character in stem:
+        encoded = character.encode("utf-8")
+        if used + len(encoded) > budget:
+            break
+        truncated += character
+        used += len(encoded)
+    return (truncated.strip() or "print-bridge-job") + suffix
+
+
+def sanitize_ipp_job_name(file_name: str, max_bytes: int = 255) -> str:
+    """Return a printer-safe IPP job name.
+
+    Some email senders prepend many invisible Unicode format characters to
+    attachment filenames. Home printers can reject or stall on very long IPP
+    ``nameWithoutLanguage`` values, so strip control/format characters and keep
+    the encoded job-name inside the common IPP 255-octet limit.
+    """
+    name = os.path.basename(str(file_name or "")).replace("\x00", "")
+    name = unicodedata.normalize("NFC", name)
+    name = "".join(
+        character
+        for character in name
+        if unicodedata.category(character)[0] != "C"
+    )
+    name = " ".join(name.split()).strip()
+    if not name:
+        name = "print-bridge-job.pdf"
+    return _truncate_utf8(name, max_bytes)
 
 
 def _encode_attr(tag: int, name: str, value: str) -> bytes:
@@ -145,7 +188,7 @@ def build_ipp_packet(
     header += _encode_attr(_TAG_CHARSET, "attributes-charset", "utf-8")
     header += _encode_attr(_TAG_NAT_LANG, "attributes-natural-language", "en")
     header += _encode_attr(_TAG_URI, "printer-uri", printer_uri)
-    header += _encode_attr(_TAG_NAME, "job-name", file_name)
+    header += _encode_attr(_TAG_NAME, "job-name", sanitize_ipp_job_name(file_name))
     header += _encode_attr(_TAG_MIME, "document-format", document_format)
 
     header += _GROUP_JOB

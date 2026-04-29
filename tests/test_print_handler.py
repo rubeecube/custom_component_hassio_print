@@ -18,6 +18,7 @@ from print_handler import (
     is_booklet_job,
     parse_ipp_attributes,
     parse_ipp_response_status,
+    sanitize_ipp_job_name,
 )
 
 PDF_STUB = b"%PDF-1.4 minimal"
@@ -91,6 +92,32 @@ def test_ipp_packet_end_of_attributes_tag_present():
 def test_ipp_packet_job_name_encoded():
     pkt = build_ipp_packet(PRINTER, "my-document.pdf", "one-sided", PDF_STUB)
     assert b"my-document.pdf" in pkt
+
+
+def test_sanitize_ipp_job_name_removes_direction_marks():
+    name = "\u200f" * 200 + "שיחת שבוע בצרפתית 294 - אמור.pdf"
+
+    assert sanitize_ipp_job_name(name) == "שיחת שבוע בצרפתית 294 - אמור.pdf"
+
+
+def test_sanitize_ipp_job_name_limits_utf8_bytes_and_keeps_extension():
+    name = ("שיחת שבוע " * 80) + ".pdf"
+    clean_name = sanitize_ipp_job_name(name)
+
+    assert len(clean_name.encode("utf-8")) <= 255
+    assert clean_name.endswith(".pdf")
+
+
+def test_ipp_packet_sanitizes_job_name_before_encoding():
+    pkt = build_ipp_packet(
+        PRINTER,
+        "\u200f" * 20 + "שיחת שבוע בצרפתית.pdf",
+        "one-sided",
+        PDF_STUB,
+    )
+
+    assert "\u200f".encode("utf-8") not in pkt
+    assert "שיחת שבוע בצרפתית.pdf".encode("utf-8") in pkt
 
 
 def test_parse_successful_ipp_response():

@@ -13,6 +13,7 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import socket
 import struct
@@ -31,6 +32,7 @@ from custom_components.print_bridge.coordinator import (
     AutoPrintData,
     PendingJob,
     PrintJobResult,
+    _decode_mime_filename,
 )
 
 from .conftest import MOCK_CONFIG_DATA, MOCK_OPTIONS
@@ -634,6 +636,42 @@ async def test_send_print_job_rejects_ipp_error_body(hass: HomeAssistant) -> Non
 
     assert result.success is False
     assert "document-format-not-supported" in result.error
+
+
+async def test_send_print_job_reports_timeout_context_and_sanitizes_filename(
+    hass: HomeAssistant,
+) -> None:
+    """TimeoutError string is blank, so surface type, endpoint, and clean name."""
+    _, coordinator = await _setup_coordinator(hass)
+
+    mock_session = MagicMock()
+    mock_session.post.side_effect = asyncio.TimeoutError()
+
+    with patch(
+        "custom_components.print_bridge.coordinator.async_get_clientsession",
+        return_value=mock_session,
+    ):
+        result = await coordinator.async_send_print_job(
+            "\u200f" * 20 + "שיחת שבוע בצרפתית 294 - אמור.pdf",
+            _FAKE_PDF,
+            "one-sided",
+            False,
+        )
+
+    assert result.success is False
+    assert result.filename == "שיחת שבוע בצרפתית 294 - אמור.pdf"
+    assert "TimeoutError" in result.error
+    assert "http://cups.local:631/printers/TestPrinter" in result.error
+    assert "timeout=300s" in result.error
+
+
+def test_decode_mime_filename_removes_windows_1255_direction_marks() -> None:
+    encoded = (
+        "=?windows-1255?B?/v7+/v7+?= "
+        "=?windows-1255?B?+enn+iD54eXyIOH2+PT66fogMjk0IC0g4O7l+C5wZGY=?="
+    )
+
+    assert _decode_mime_filename(encoded) == "שיחת שבוע בצרפתית 294 - אמור.pdf"
 
 
 async def test_check_printer_capabilities_reads_supported_formats(

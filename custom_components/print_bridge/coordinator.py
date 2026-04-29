@@ -81,6 +81,7 @@ from .print_handler import (
     ipp_response_succeeded,
     is_booklet_job,
     parse_ipp_attributes,
+    sanitize_ipp_job_name,
 )
 from .raster_converter import convert_pdf_to_jpeg, convert_pdf_to_pwg_raster
 
@@ -88,6 +89,7 @@ logger = logging.getLogger(__name__)
 
 _STATUS_INTERVAL = timedelta(minutes=5)
 _CAPABILITIES_TTL = timedelta(hours=1)
+_PRINT_JOB_TIMEOUT_SECONDS = 300
 _SCHEDULE_DAY_ALIASES = {
     "mon": "mon",
     "monday": "mon",
@@ -118,23 +120,32 @@ _FALSE_TEMPLATE_VALUES = {"", "0", "false", "no", "off", "none", "unknown", "una
 
 
 def _decode_mime_filename(value: str) -> str:
-    """Decode an RFC 2047 MIME-encoded filename (=?charset?B/Q?...?=) to plain text.
+    """Decode and clean an RFC 2047 MIME-encoded filename.
 
     Email clients encode non-ASCII filenames in attachment headers, e.g.:
     ``=?utf-8?B?QXUgUHVpdHM...?= =?utf-8?Q?m_5786_A4.pdf?=``
     Falls back to the raw string if decoding fails.
     """
     if "=?" not in value:
-        return value
+        return sanitize_ipp_job_name(value)
     try:
         from email.header import decode_header as _dh
         parts = _dh(value)
-        return "".join(
+        decoded = "".join(
             p.decode(enc or "utf-8", errors="replace") if isinstance(p, bytes) else p
             for p, enc in parts
         )
+        return sanitize_ipp_job_name(decoded)
     except Exception:
-        return value
+        return sanitize_ipp_job_name(value)
+
+
+def _describe_exception(exc: BaseException) -> str:
+    """Return useful text even for exceptions whose ``str()`` is empty."""
+    message = str(exc).strip()
+    if message:
+        return f"{type(exc).__name__}: {message}"
+    return type(exc).__name__
 
 
 def _normalise_email_address(value: str) -> str:
@@ -1255,15 +1266,17 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         self, filename: str, pdf_data: bytes, duplex_mode: str, booklet: bool
     ) -> PrintJobResult:
         """Build an IPP packet and POST it to CUPS."""
+        filename = sanitize_ipp_job_name(filename)
         if booklet:
             try:
                 pdf_data = await self.hass.async_add_executor_job(
                     create_booklet, pdf_data
                 )
             except Exception as exc:
-                logger.error("Booklet conversion failed for '%s': %s", filename, exc)
+                error = _describe_exception(exc)
+                logger.error("Booklet conversion failed for '%s': %s", filename, error)
                 return PrintJobResult(
-                    filename=filename, success=False, error=str(exc),
+                    filename=filename, success=False, error=error,
                     duplex=duplex_mode, booklet=booklet,
                 )
 
@@ -1273,9 +1286,10 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 pdf_data, sides
             )
         except Exception as exc:
-            logger.error("Document conversion failed for '%s': %s", filename, exc)
+            error = _describe_exception(exc)
+            logger.error("Document conversion failed for '%s': %s", filename, error)
             return PrintJobResult(
-                filename=filename, success=False, error=str(exc),
+                filename=filename, success=False, error=error,
                 duplex=duplex_mode, booklet=booklet,
             )
 
@@ -1293,7 +1307,10 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 self._ipp_endpoint,
                 data=packet,
                 headers={"Content-Type": "application/ipp"},
-                timeout=aiohttp.ClientTimeout(total=60),
+                timeout=aiohttp.ClientTimeout(
+                    total=_PRINT_JOB_TIMEOUT_SECONDS,
+                    sock_connect=30,
+                ),
             ) as resp:
                 body = await resp.read()
                 body_prefix = body[:256].lstrip().lower()
@@ -1332,9 +1349,13 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 )
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            logger.error("Network error printing '%s': %s", filename, exc)
+            error = (
+                f"{_describe_exception(exc)} while POSTing to {self._ipp_endpoint} "
+                f"(timeout={_PRINT_JOB_TIMEOUT_SECONDS}s)"
+            )
+            logger.error("Network error printing '%s': %s", filename, error)
             return PrintJobResult(
-                filename=filename, success=False, error=str(exc),
+                filename=filename, success=False, error=error,
                 duplex=duplex_mode, booklet=booklet,
             )
 
