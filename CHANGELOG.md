@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.17] — 2026-04-30
+
+### Added
+
+- **Cancel Queued Jobs button** — added a Home Assistant button entity that discards schedule-held jobs and deletes queued PDF files before they are submitted to the printer.
+
+### Changed
+
+- Bumped package metadata to `0.1.17`.
+
+---
+
 ## [0.1.16] — 2026-04-30
 
 ### Fixed
@@ -192,6 +204,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.1.17]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.17
 [0.1.16]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.16
 [0.1.15]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.15
 [0.1.14]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.14

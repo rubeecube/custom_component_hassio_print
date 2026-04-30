@@ -22,6 +22,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.print_bridge.const import (
     BINARY_SENSOR_PRINTER_ONLINE,
+    BUTTON_CANCEL_QUEUED_JOBS,
     BUTTON_PRINT_EMAIL_PREFIX,
     BUTTON_PRINT_EMAIL_SLOTS,
     CONF_ALLOWED_SENDERS,
@@ -45,6 +46,7 @@ from custom_components.print_bridge.const import (
 from custom_components.print_bridge.coordinator import (
     AutoPrintData,
     FilterPreviewResult,
+    PendingJob,
     PrintJobResult,
 )
 from custom_components.print_bridge.imap_checker import EmailPreview
@@ -329,6 +331,37 @@ async def test_button_press_failure_raises(hass: HomeAssistant) -> None:
         pytest.raises(HomeAssistantError),
     ):
         await hass.services.async_call("button", "press", {"entity_id": btn}, blocking=True)
+
+
+async def test_cancel_queued_jobs_button_clears_waiting_work(
+    hass: HomeAssistant,
+) -> None:
+    pending = PendingJob(
+        entry_id="imap_entry_1",
+        uid="404",
+        part_key="1",
+        filename="waiting.pdf",
+    )
+    entry = await _setup(
+        hass,
+        AutoPrintData(
+            queue_depth=1,
+            printer_online=True,
+            pending_jobs=[pending],
+        ),
+    )
+    entry.runtime_data._pending_jobs.append(pending)
+    btn = _entity_id(hass, entry, BUTTON_CANCEL_QUEUED_JOBS)
+
+    with patch.object(
+        entry.runtime_data,
+        "_async_delete_queue_pdfs",
+        new=AsyncMock(return_value=1),
+    ) as mock_delete:
+        await hass.services.async_call("button", "press", {"entity_id": btn}, blocking=True)
+
+    mock_delete.assert_awaited_once()
+    assert entry.runtime_data._pending_jobs == []
 
 
 async def test_preview_email_buttons_registered(hass: HomeAssistant) -> None:

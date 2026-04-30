@@ -12,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    BUTTON_CANCEL_QUEUED_JOBS,
     BUTTON_CHECK_FILTER,
     BUTTON_CHECK_PRINTER_CAPABILITIES,
     BUTTON_FLUSH_PENDING,
@@ -65,6 +66,7 @@ async def async_setup_entry(
             CheckPrinterCapabilitiesButton(coordinator, entry),
             RetryLastFailedButton(coordinator, entry),
             FlushPendingButton(coordinator, entry),
+            CancelQueuedJobsButton(coordinator, entry),
             *[
                 PrintPreviewEmailButton(coordinator, entry, slot)
                 for slot in range(BUTTON_PRINT_EMAIL_SLOTS)
@@ -184,6 +186,29 @@ class FlushPendingButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):
     async def async_press(self) -> None:
         """Flush the schedule queue and print all waiting jobs now."""
         await self.coordinator.async_flush_pending()
+
+
+class CancelQueuedJobsButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):
+    """Cancel jobs that are still waiting inside Print Bridge."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = BUTTON_CANCEL_QUEUED_JOBS
+    _attr_icon = "mdi:printer-cancel"
+
+    def __init__(self, coordinator: AutoPrintCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_{BUTTON_CANCEL_QUEUED_JOBS}"
+        self._attr_device_info = _device_info(entry)
+
+    @property
+    def available(self) -> bool:
+        """Only available when Print Bridge has queued work to discard."""
+        data = self.coordinator.data
+        return bool(data and (data.pending_jobs or data.queue_depth > 0))
+
+    async def async_press(self) -> None:
+        """Discard jobs that have not yet been submitted to the printer."""
+        await self.coordinator.async_cancel_queued_jobs()
 
 
 class PrintPreviewEmailButton(CoordinatorEntity[AutoPrintCoordinator], ButtonEntity):

@@ -1156,8 +1156,8 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
         except Exception:
             logger.debug("Could not create filter-preview notification", exc_info=True)
 
-    async def async_clear_queue(self) -> int:
-        """Delete all PDFs in the configured queue folder."""
+    async def _async_delete_queue_pdfs(self) -> int:
+        """Delete PDF files that are still waiting in the queue folder."""
         folder = self._queue_folder
 
         def _do_clear() -> int:
@@ -1174,9 +1174,33 @@ class AutoPrintCoordinator(DataUpdateCoordinator[AutoPrintData]):
                 logger.warning("Could not list queue folder '%s'", folder)
             return deleted
 
-        deleted = await self.hass.async_add_executor_job(_do_clear)
+        return await self.hass.async_add_executor_job(_do_clear)
+
+    async def async_clear_queue(self) -> int:
+        """Delete all PDFs in the configured queue folder."""
+        deleted = await self._async_delete_queue_pdfs()
         await self.async_request_refresh()
         return deleted
+
+    async def async_cancel_queued_jobs(self) -> int:
+        """Discard jobs that Print Bridge has not submitted to the printer yet.
+
+        This clears both schedule-held IMAP jobs and PDFs in the configured
+        queue folder. It cannot recall a job once the printer has accepted it.
+        """
+        pending_count = len(self._pending_jobs)
+        self._pending_jobs.clear()
+        deleted_files = await self._async_delete_queue_pdfs()
+        total = pending_count + deleted_files
+        if total:
+            logger.info(
+                "Cancelled %d queued job(s): %d schedule-held, %d file-queue PDF(s)",
+                total,
+                pending_count,
+                deleted_files,
+            )
+        await self.async_request_refresh()
+        return total
 
     async def async_check_printer_capabilities(
         self, *, force: bool = True

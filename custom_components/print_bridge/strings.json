@@ -126,7 +126,8 @@
       "check_filter":       { "name": "Check Filter" },
       "check_printer_capabilities": { "name": "Check Printer Capabilities" },
       "retry_last_failed":  { "name": "Retry Last Failed Job" },
-      "flush_pending":      { "name": "Print Queued Jobs Now" }
+      "flush_pending":      { "name": "Print Queued Jobs Now" },
+      "cancel_queued_jobs": { "name": "Cancel Queued Jobs" }
     }
   }
 }

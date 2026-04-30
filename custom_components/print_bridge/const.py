@@ -121,6 +121,7 @@ BUTTON_CHECK_FILTER = "check_filter"
 BUTTON_CHECK_PRINTER_CAPABILITIES = "check_printer_capabilities"
 BUTTON_RETRY_LAST_FAILED = "retry_last_failed"
 BUTTON_FLUSH_PENDING = "flush_pending"
+BUTTON_CANCEL_QUEUED_JOBS = "cancel_queued_jobs"
 BUTTON_PRINT_EMAIL_PREFIX = "print_email"
 BUTTON_PRINT_EMAIL_SLOTS = 5
 
