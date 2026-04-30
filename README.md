@@ -7,8 +7,8 @@
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-2024.4%2B-blue.svg)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-138%20passing-brightgreen.svg)](tests/)
-[![Version](https://img.shields.io/badge/version-0.1.17-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
+[![Tests](https://img.shields.io/badge/tests-139%20passing-brightgreen.svg)](tests/)
+[![Version](https://img.shields.io/badge/version-0.1.18-blue.svg)](https://github.com/rubeecube/ha-print-bridge/releases)
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository?owner=rubeecube&repository=ha-print-bridge&category=integration)
 [![Add Print Bridge to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=print_bridge)
@@ -53,7 +53,7 @@ for booklet printing, and sends an IPP/2.0 `Print-Job` directly to CUPS.
 | **Mailbox/printer selectors** | Dashboard selects choose which IMAP account to scan and which printer receives manual jobs |
 | **Dashboard configuration** | Switch/select/text entities let Lovelace manage filters, duplex, cleanup, notifications, and schedule settings |
 | **Scheduled printing** | Hold jobs outside allowed days, hours, or a custom HA template gate |
-| **Queued job cancel** | Dashboard button discards schedule-held jobs and queued PDFs before submission |
+| **Queued job view/cancel** | Dashboard shows up to five scheduled jobs and can discard queued work before submission |
 | **Blueprint** | Advanced per-sender/per-keyword rules with folder, duplex, and booklet logic |
 | **Lovelace dashboard** | Paste-ready printer view plus detailed audit view |
 | **Services** | `print_file`, `clear_queue`, `process_imap_part`, `check_filter`, `print_email` |
@@ -248,7 +248,7 @@ Then go to **Settings → System → Logs** to view debug output. This shows eac
 | `sensor.print_bridge_*_last_print_job` | Sensor | `success` / `failed` | `last_filename`, `last_status`, `sender`, `duplex`, `booklet`, `timestamp` |
 | `sensor.print_bridge_*_job_log` | Sensor | Total jobs sent | `jobs[]` — last 50 print attempts with full metadata |
 | `sensor.print_bridge_*_filter_preview` | Sensor | Matching emails with PDF | `emails[]`, `checked_at`, `imap_account`, `total_found`, `matching_filter`, `with_pdf` |
-| `sensor.print_bridge_*_scheduled_queue` | Sensor | Queued job count | `jobs[]`, `schedule_enabled`, `schedule_start`, `schedule_end`, `schedule_days`, `schedule_template` |
+| `sensor.print_bridge_*_scheduled_queue` | Sensor | Queued job count | `jobs[]` shows up to 5 waiting jobs, plus `total_jobs`, `shown_jobs`, schedule settings |
 | `binary_sensor.print_bridge_*_printer_online` | Binary Sensor | `on` / `off` | — |
 | `select.print_bridge_*_imap_account` | Select | Selected IMAP account | Used by **Check Filter** and on-demand email printing when no account is specified |
 | `select.print_bridge_*_target_printer` | Select | Selected printer | Used by dashboard print actions and default print services |
@@ -438,6 +438,7 @@ Replace `PRINTER_NAME` with the slug for your printer queue name.
 The view includes:
 
 - **Status row** — printer online, queue depth, jobs sent, last job status
+- **Scheduled Queue table** — up to 5 waiting jobs with filename, sender, and queue time
 - **Logbook card** — 7-day print event history
 - **Recent jobs table** — last 50 jobs: timestamp / filename / ✅❌ / sender / duplex / booklet
 - **Filter Preview table** — folder / subject / sender / ✅match / PDF count

@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.1.18] — 2026-04-30
+
+### Added
+
+- **Scheduled queue preview** — the queue sensor and dashboard templates now show up to five waiting jobs while preserving the full queued-job count.
+
+### Changed
+
+- Bumped package metadata to `0.1.18`.
+
+---
+
 ## [0.1.17] — 2026-04-30
 
 ### Added
@@ -204,6 +216,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.1.18]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.18
 [0.1.17]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.17
 [0.1.16]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.16
 [0.1.15]: https://github.com/rubeecube/ha-print-bridge/releases/tag/v0.1.15

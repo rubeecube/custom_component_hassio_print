@@ -29,6 +29,8 @@ from .coordinator import AutoPrintCoordinator, AutoPrintData
 
 logger = logging.getLogger(__name__)
 
+_MAX_DISPLAYED_PENDING_JOBS = 5
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -242,7 +244,8 @@ class PendingJobsSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
     """Jobs held in the schedule queue, waiting for the print window to open.
 
     state      : number of queued jobs
-    attributes : jobs[] list with filename, sender, queued_at, uid
+    attributes : jobs[] list with up to five filename/sender/queued_at/uid entries,
+                 total_jobs, shown_jobs,
                  schedule_enabled, schedule_start, schedule_end,
                  schedule_days, schedule_template
     """
@@ -274,6 +277,8 @@ class PendingJobsSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
         )
         opts = self._entry.options
         data = self.coordinator.data
+        pending_jobs = data.pending_jobs if data else []
+        visible_jobs = pending_jobs[:_MAX_DISPLAYED_PENDING_JOBS]
         return {
             "schedule_enabled": opts.get(CONF_SCHEDULE_ENABLED, DEFAULT_SCHEDULE_ENABLED),
             "schedule_start": opts.get(CONF_SCHEDULE_START, DEFAULT_SCHEDULE_START),
@@ -282,5 +287,7 @@ class PendingJobsSensor(CoordinatorEntity[AutoPrintCoordinator], SensorEntity):
             "schedule_template": opts.get(
                 CONF_SCHEDULE_TEMPLATE, DEFAULT_SCHEDULE_TEMPLATE
             ),
-            "jobs": [j.as_dict() for j in (data.pending_jobs if data else [])],
+            "total_jobs": len(pending_jobs),
+            "shown_jobs": len(visible_jobs),
+            "jobs": [j.as_dict() for j in visible_jobs],
         }

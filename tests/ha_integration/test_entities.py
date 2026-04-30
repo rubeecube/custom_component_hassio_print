@@ -38,6 +38,7 @@ from custom_components.print_bridge.const import (
     SELECT_IMAP_ACCOUNT,
     SELECT_TARGET_PRINTER,
     SENSOR_LAST_JOB,
+    SENSOR_PENDING_JOBS,
     SENSOR_QUEUE_DEPTH,
     SWITCH_AUTO_PRINT_ENABLED,
     TEXT_ALLOWED_SENDERS,
@@ -138,6 +139,35 @@ async def test_queue_depth_sensor(hass: HomeAssistant) -> None:
 async def test_queue_depth_zero(hass: HomeAssistant) -> None:
     entry = await _setup(hass, AutoPrintData(queue_depth=0, printer_online=True))
     assert hass.states.get(_entity_id(hass, entry, SENSOR_QUEUE_DEPTH)).state == "0"
+
+
+async def test_scheduled_queue_sensor_shows_max_five_jobs(
+    hass: HomeAssistant,
+) -> None:
+    pending_jobs = [
+        PendingJob(
+            entry_id="imap_entry_1",
+            uid=str(index),
+            part_key="1",
+            filename=f"queued_{index}.pdf",
+        )
+        for index in range(7)
+    ]
+    entry = await _setup(
+        hass,
+        AutoPrintData(
+            queue_depth=0,
+            printer_online=True,
+            pending_jobs=pending_jobs,
+        ),
+    )
+
+    state = hass.states.get(_entity_id(hass, entry, SENSOR_PENDING_JOBS))
+
+    assert state.state == "7"
+    assert state.attributes["total_jobs"] == 7
+    assert state.attributes["shown_jobs"] == 5
+    assert [job["uid"] for job in state.attributes["jobs"]] == ["0", "1", "2", "3", "4"]
 
 
 # ---------------------------------------------------------------------------

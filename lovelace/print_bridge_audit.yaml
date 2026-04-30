@@ -98,6 +98,39 @@ cards:
         tap_action:
           action: toggle
 
+      - type: button
+        name: Cancel Queued Jobs
+        icon: mdi:printer-cancel
+        entity: button.print_bridge_YOUR_SLUG_cancel_queued_jobs
+        tap_action:
+          action: toggle
+
+  # ── Scheduled queue (auto-detected, no slug) ──────────────────────────────
+  - type: markdown
+    title: Scheduled Queue
+    content: |
+      {% set s = (states.sensor | selectattr('entity_id', 'search', 'print_bridge.*scheduled_queue') | list | first | default(none)) %}
+      {% if s is none %}
+      *No scheduled queue sensor found.*
+      {% else %}
+      {% set jobs = state_attr(s.entity_id, 'jobs') or [] %}
+      {% set total = state_attr(s.entity_id, 'total_jobs') or (jobs | count) %}
+      {% if total == 0 %}
+      *No scheduled jobs are waiting.*
+      {% else %}
+      **{{ total }}** scheduled job{{ '' if total == 1 else 's' }} waiting. Showing up to **5**.
+
+      | File | From | Queued |
+      |------|------|--------|
+      {% for job in jobs[:5] %}
+      | `{{ job.filename | truncate(34) }}` | {{ job.sender or '—' }} | {{ job.queued_at }} |
+      {% endfor %}
+      {% if total > (jobs | count) %}
+      _... and {{ total - (jobs | count) }} more_
+      {% endif %}
+      {% endif %}
+      {% endif %}
+
   # ── Blueprint install (no slug needed) ────────────────────────────────────
   - type: button
     name: Install Automation Blueprint

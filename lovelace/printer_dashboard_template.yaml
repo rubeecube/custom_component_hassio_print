@@ -33,6 +33,27 @@ sections:
   - type: grid
     cards:
       - type: heading
+        heading: Scheduled Queue
+      - type: markdown
+        content: |
+          {% set jobs = state_attr('sensor.print_bridge_YOUR_SLUG_scheduled_queue', 'jobs') or [] %}
+          {% set total = state_attr('sensor.print_bridge_YOUR_SLUG_scheduled_queue', 'total_jobs') or (jobs | count) %}
+          {% if total == 0 %}
+          *No scheduled jobs are waiting.*
+          {% else %}
+          | File | From | Queued |
+          |------|------|--------|
+          {% for job in jobs[:5] %}
+          | `{{ job.filename | truncate(34) }}` | {{ job.sender or '—' }} | {{ job.queued_at }} |
+          {% endfor %}
+          {% if total > (jobs | count) %}
+          _... and {{ total - (jobs | count) }} more_
+          {% endif %}
+          {% endif %}
+
+  - type: grid
+    cards:
+      - type: heading
         heading: Print Actions
       - type: tile
         entity: button.print_bridge_YOUR_SLUG_check_filter
@@ -40,6 +61,8 @@ sections:
         entity: button.print_bridge_YOUR_SLUG_print_test_page
       - type: tile
         entity: button.print_bridge_YOUR_SLUG_print_queued_jobs_now
+      - type: tile
+        entity: button.print_bridge_YOUR_SLUG_cancel_queued_jobs
       - type: tile
         entity: button.print_bridge_YOUR_SLUG_retry_last_failed_job
 
